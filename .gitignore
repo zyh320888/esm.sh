@@ -7,3 +7,4 @@ esmd
 .esmd/
 node_modules/
 dist/
+layer.zip
