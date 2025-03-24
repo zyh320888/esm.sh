@@ -9,3 +9,4 @@ node_modules/
 dist/
 layer.zip
 build/
+esmd.tar.gz
