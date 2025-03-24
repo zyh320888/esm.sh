@@ -28,8 +28,8 @@ function run() {
     } else if (type.startsWith("text/")) {
       const lang = type.slice(5);
       if (loaders.has(lang)) {
-        if (code.length > 128 * 1024) {
-          throw new Error("[esm.sh/tsx] reach 128KB limit");
+        if (code.length > 512 * 1024) {
+          throw new Error("[esm.sh/tsx] reach 512KB limit");
         }
         tsxScripts.push({ el, lang: lang === "babel" ? "tsx" : lang, code });
       }
