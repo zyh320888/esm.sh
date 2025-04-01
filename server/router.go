@@ -378,7 +378,7 @@ func esmRouter(db Database, buildStorage storage.Storage, logger *log.Logger) re
 			}
 
 		// builtin scripts
-		case "/x", "/tsx", "/run":
+		case "/x", "/tsx", "/run", "/xs":
 			ifNoneMatch := ctx.R.Header.Get("If-None-Match")
 			if ifNoneMatch == globalETag && !DEBUG {
 				return rex.Status(http.StatusNotModified, nil)
