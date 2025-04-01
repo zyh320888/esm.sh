@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/esm-dev/esm.sh/server/common"
@@ -76,7 +77,20 @@ func transform(options *ResolvedTransformOptions) (out *TransformOutput, err err
 				break
 			}
 		}
-		if !ok {
+		
+		// 处理HTTP模块中的React导入
+		if !ok && isHttpSepcifier(options.Filename) {
+			reactImport := extractReactImportFromCode(options.Code)
+			if reactImport != "" {
+				jsxImportSource = reactImport
+				if options.importMap.Imports == nil {
+					options.importMap.Imports = make(map[string]string)
+				}
+				options.importMap.Imports["react/jsx-runtime"] = jsxImportSource + "/jsx-runtime"
+			} else {
+				jsxImportSource = "react"
+			}
+		} else if !ok {
 			jsxImportSource = "react"
 		}
 	}
@@ -141,4 +155,23 @@ func transform(options *ResolvedTransformOptions) (out *TransformOutput, err err
 		}
 	}
 	return
+}
+
+// extractReactImportFromCode 从代码中提取React导入URL，用于HTTP模块处理
+func extractReactImportFromCode(code string) string {
+	// 首先尝试标准的import语法格式
+	re := regexp.MustCompile(`from\s+['"]([^'"]*(?:[rR]eact)@[^'"]+)['"]`)
+	matches := re.FindStringSubmatch(code)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	
+	// 如果没有找到标准格式，尝试匹配任何包含react@的引号字符串
+	re = regexp.MustCompile(`['"]([^'"]*(?:[rR]eact)@[^'"]+)['"]`)
+	matches = re.FindStringSubmatch(code)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	
+	return ""
 }
