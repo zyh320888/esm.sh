@@ -20,6 +20,8 @@ type DependencyInfo struct {
 
 // 共享的模块映射，由下载过程填充
 var globalModuleMap map[string]string
+// 是否压缩代码
+var minify bool
 
 func DownloadDependencies(args []string) error {
     fmt.Println("开始执行下载命令...")
@@ -33,15 +35,19 @@ func DownloadDependencies(args []string) error {
 
     entryPath := args[0]
     outDir := "dist"
+    minify = false
     
     fmt.Printf("入口路径: %s\n", entryPath)
     
-    // 从参数中获取输出目录
+    // 从参数中获取输出目录和压缩选项
     for i := 1; i < len(args); i++ {
         if args[i] == "--out-dir" && i+1 < len(args) {
             outDir = args[i+1]
             fmt.Printf("输出目录: %s\n", outDir)
-            break
+            i++
+        } else if args[i] == "--minify" {
+            minify = true
+            fmt.Println("启用代码压缩")
         }
     }
 
@@ -556,12 +562,14 @@ func compileFile(content string, filename string) (string, error) {
         Target        string          `json:"target"`
         ImportMap     json.RawMessage `json:"importMap"`
         JsxImportSource string        `json:"jsxImportSource,omitempty"`
+        Minify        bool            `json:"minify"`
     }{
         Code:          content,
         Filename:      filename,
         Lang:          lang,
         Target:        "es2022",
         ImportMap:     importMapBytes,
+        Minify:        minify,
     }
     
     // 如果是 JSX/TSX，添加 JSX 导入源
