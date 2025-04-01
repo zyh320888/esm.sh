@@ -22,6 +22,13 @@ type DependencyInfo struct {
 var globalModuleMap map[string]string
 // 是否压缩代码
 var minify bool
+// API 基础 URL
+var apiBaseURL string
+
+// 获取API域名部分，用于路径处理
+func getAPIDomain() string {
+    return strings.TrimPrefix(strings.TrimPrefix(apiBaseURL, "https://"), "http://")
+}
 
 func DownloadDependencies(args []string) error {
     fmt.Println("开始执行下载命令...")
@@ -36,6 +43,8 @@ func DownloadDependencies(args []string) error {
     entryPath := args[0]
     outDir := "dist"
     minify = false
+    // 默认使用 esm.sh 作为 API 基础 URL
+    apiBaseURL = "https://esm.sh"
     
     fmt.Printf("入口路径: %s\n", entryPath)
     
@@ -48,6 +57,10 @@ func DownloadDependencies(args []string) error {
         } else if args[i] == "--minify" {
             minify = true
             fmt.Println("启用代码压缩")
+        } else if args[i] == "--api-url" && i+1 < len(args) {
+            apiBaseURL = args[i+1]
+            fmt.Printf("使用API基础URL: %s\n", apiBaseURL)
+            i++
         }
     }
 
@@ -210,7 +223,7 @@ func DownloadDependencies(args []string) error {
                     actualPath = "/" + actualPath
                 }
                 
-                actualUrl := "https://esm.sh" + actualPath
+                actualUrl := apiBaseURL + actualPath
                 localPath := filepath.Join(esmDir, actualPath)
                 
                 fmt.Printf("下载实际模块: %s\n", actualUrl)
@@ -239,6 +252,13 @@ func DownloadDependencies(args []string) error {
                 actualPaths = append(actualPaths, actualPath)
             }
             
+            // 子模块不存在实际模块路径的处理
+            if len(exportMatches) == 0 {
+                fmt.Printf("未在子模块中找到实际模块路径\n")
+                globalModuleMap[spec] = "/" + apiBaseURL + "/" + modulePath + ".js"
+                return
+            }
+            
             // 保存映射
             if len(actualPaths) > 0 {
                 moduleMap[spec] = actualPaths[0]
@@ -247,14 +267,14 @@ func DownloadDependencies(args []string) error {
                 // 下载常见的子模块
                 if spec == "react" {
                     // 下载 react/jsx-runtime
-                    downloadSubModule(spec, "react/jsx-runtime", "https://esm.sh/react/jsx-runtime", outDir, semaphore, errChan)
+                    downloadSubModule(spec, "react/jsx-runtime", apiBaseURL + "/react/jsx-runtime", outDir, semaphore, errChan)
                 } else if spec == "react-dom" {
                     // 下载 react-dom/client
-                    downloadSubModule(spec, "react-dom/client", "https://esm.sh/react-dom/client", outDir, semaphore, errChan)
+                    downloadSubModule(spec, "react-dom/client", apiBaseURL + "/react-dom/client", outDir, semaphore, errChan)
                 }
             } else {
-                moduleMap[spec] = "/" + modulePath + ".js"
-                globalModuleMap[spec] = "/" + modulePath + ".js"
+                moduleMap[spec] = "/" + apiBaseURL + "/" + modulePath + ".js"
+                globalModuleMap[spec] = "/" + apiBaseURL + "/" + modulePath + ".js"
             }
             
             fmt.Printf("下载成功: %s -> 包装器模块和 %d 个实际模块\n", spec, len(actualPaths))
@@ -534,6 +554,9 @@ func compileFile(content string, filename string) (string, error) {
         return "", fmt.Errorf("不支持的文件类型: %s", fileExt)
     }
     
+    // 提取域名部分，用于后续处理
+    apiDomain := strings.TrimPrefix(strings.TrimPrefix(apiBaseURL, "https://"), "http://")
+    
     // 构建自定义 importmap，基于已下载的模块
     customImportMap := make(map[string]string)
     for moduleName, localPath := range globalModuleMap {
@@ -541,9 +564,9 @@ func compileFile(content string, filename string) (string, error) {
         
         // 添加常见的子模块映射
         if moduleName == "react" {
-            customImportMap["react/jsx-runtime"] = "/esm.sh/react/jsx-runtime"
+            customImportMap["react/jsx-runtime"] = "/" + apiDomain + "/react/jsx-runtime"
         } else if moduleName == "react-dom" {
-            customImportMap["react-dom/client"] = "/esm.sh/react-dom/client"
+            customImportMap["react-dom/client"] = "/" + apiDomain + "/react-dom/client"
         }
     }
     
@@ -584,7 +607,7 @@ func compileFile(content string, filename string) (string, error) {
     }
     
     // 发送请求
-    resp, err := http.Post("https://esm.sh/transform", "application/json", strings.NewReader(string(reqBody)))
+    resp, err := http.Post(apiBaseURL + "/transform", "application/json", strings.NewReader(string(reqBody)))
     if err != nil {
         return "", fmt.Errorf("发送请求失败: %v", err)
     }
@@ -610,13 +633,13 @@ func compileFile(content string, filename string) (string, error) {
     
     // 修复重复的 /esm.sh 路径问题
     // 例如将 "/esm.sh/esm.sh/react/jsx-runtime" 替换为 "/esm.sh/react/jsx-runtime"
-    duplicatePathRegex := regexp.MustCompile(`from\s+["'](/esm\.sh/esm\.sh/([^"']+))["']`)
-    compiledCode = duplicatePathRegex.ReplaceAllString(compiledCode, `from "/esm.sh/$2"`)
+    duplicatePathRegex := regexp.MustCompile(`from\s+["'](/` + apiDomain + `/` + apiDomain + `/([^"']+))["']`)
+    compiledCode = duplicatePathRegex.ReplaceAllString(compiledCode, `from "/` + apiDomain + `/$2"`)
     
     // 添加路径替换，处理相对路径引用
     // 例如将 "/react-dom@19.1.0/es2022/react-dom.mjs" 替换为 "/esm.sh/react-dom@19.1.0/es2022/react-dom.mjs"
     pathRegex := regexp.MustCompile(`from\s+["'](\/([@\w\d\.-]+)\/[^"']+)["']`)
-    compiledCode = pathRegex.ReplaceAllString(compiledCode, `from "/esm.sh$1"`)
+    compiledCode = pathRegex.ReplaceAllString(compiledCode, `from "/` + apiDomain + `$1"`)
     
     // 替换本地相对路径引用的扩展名（.tsx/.ts/.jsx -> .js）
     localImportRegex := regexp.MustCompile(`from\s+["'](\.[^"']+)(\.tsx|\.ts|\.jsx)["']`)
@@ -633,12 +656,12 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
     defer func() { <-semaphore }()
     
     // 解析URL中的模块路径
-    moduleRegex := regexp.MustCompile(`https://esm\.sh/(.+)`)
+    moduleRegex := regexp.MustCompile(`https://esm\.(sh|d8d\.fun)/(.+)`)
     matches := moduleRegex.FindStringSubmatch(url)
     
     var modulePath string
-    if len(matches) > 1 {
-        modulePath = matches[1]
+    if len(matches) > 2 {
+        modulePath = matches[2]
     } else {
         modulePath = subModule
     }
@@ -671,13 +694,16 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         return
     }
     
+    // 提取域名部分，用于后续处理
+    apiDomain := strings.TrimPrefix(strings.TrimPrefix(apiBaseURL, "https://"), "http://")
+    
     // 从包装器模块中提取实际模块路径
     exportRegex := regexp.MustCompile(`["']([^"']+\.mjs)["']`)
     exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
     
     if len(exportMatches) == 0 {
         fmt.Printf("未在子模块中找到实际模块路径\n")
-        globalModuleMap[subModule] = "/" + modulePath + ".js"
+        globalModuleMap[subModule] = "/" + apiDomain + "/" + modulePath + ".js"
         return
     }
     
@@ -692,7 +718,7 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
             actualPath = "/" + actualPath
         }
         
-        actualUrl := "https://esm.sh" + actualPath
+        actualUrl := apiBaseURL + actualPath
         localPath := filepath.Join(esmDir, actualPath)
         
         fmt.Printf("下载子模块实际文件: %s\n", actualUrl)
