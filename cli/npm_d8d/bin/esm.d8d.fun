@@ -5,13 +5,13 @@ const { createWriteStream, existsSync, readFileSync } = require("fs");
 const { Writable } = require("stream");
 const { join } = require("path");
 
-// On macOS/Linux, this file will be linked to "@esm.sh/cli-{os}-{arch}/bin/esm.sh" by the install script.
+// On macOS/Linux, this file will be linked to "@esm.d8d.fun/cli-{os}-{arch}/bin/esm.d8d.fun" by the install script.
 // On Windows, or if the install script is interrupted, the binary path is resolved manually and executed.
 try {
   execFileSync(resolveBinaryPath(), process.argv.slice(2), { stdio: 'inherit' })
 } catch (err) {
   downloadBinaryFromGitHub().then((res) => {
-    const binPath = join(__dirname, "esm.sh" + (getBinExtension() || ".bin"));
+    const binPath = join(__dirname, "esm.d8d.fun" + (getBinExtension() || ".bin"));
     res.pipeTo.pipeTo(Writable.toWeb(createWriteStream(binPath))).then(() => {
       execFileSync(binPath, process.argv.slice(2), { stdio: 'inherit' });
     });
@@ -19,12 +19,12 @@ try {
 }
 
 function resolveBinaryPath() {
-  const exeBinPath = join(__dirname, "esm.sh.exe");
+  const exeBinPath = join(__dirname, "esm.d8d.fun.exe");
   if (existsSync(exeBinPath)) {
     return exeBinPath;
   }
-  const cliBinPackage = `@esm.sh/cli-${getOS()}-${getArch()}`;
-  const binPath = require.resolve(cliBinPackage + "/bin/esm.sh" + getBinExtension());
+  const cliBinPackage = `@esm.d8d.fun/cli-${getOS()}-${getArch()}`;
+  const binPath = require.resolve(cliBinPackage + "/bin/esm.d8d.fun" + getBinExtension());
   if (!existsSync(binPath)) {
     throw new Error(`Could not find the binary of '${cliBinPackage}'`);
   }
@@ -35,7 +35,7 @@ async function downloadBinaryFromGitHub() {
   const pkgInfo = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf8"));
   const [_, minor, patch] = pkgInfo.version.split(".");
   const tag = "v" + minor + (Number(patch) > 0 ? "_" + patch : "");
-  const url = `https://github.com/esm-dev/esm.sh/releases/download/${tag}/esm.sh-cli-${getOS()}-${getArch()}.gz`;
+  const url = `https://github.com/zyh320888/esm.sh/releases/download/${tag}/esm.d8d.fun-cli-${getOS()}-${getArch()}.gz`;
   const res = await fetch(url);
   if (!res.ok) {
     res.body?.cancel();

@@ -1,23 +1,23 @@
 {
-  "name": "esm.sh",
+  "name": "esm.d8d.fun",
   "version": "*",
   "description": "A nobuild CDN for modern web development.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/esm-dev/esm.sh.git"
+    "url": "git+https://github.com/zyh320888/esm.sh.git"
   },
   "license": "MIT",
   "bin": {
-    "esm.sh": "bin/esm.sh"
+    "esm.d8d.fun": "bin/esm.d8d.fun"
   },
   "scripts": {
     "postinstall": "node install.mjs"
   },
   "optionalDependencies": {
-    "@esm.sh/cli-darwin-arm64": "*",
-    "@esm.sh/cli-darwin-amd64": "*",
-    "@esm.sh/cli-linux-arm64": "*",
-    "@esm.sh/cli-linux-amd64": "*"
+    "@esm.d8d.fun/cli-darwin-arm64": "*",
+    "@esm.d8d.fun/cli-darwin-amd64": "*",
+    "@esm.d8d.fun/cli-linux-arm64": "*",
+    "@esm.d8d.fun/cli-linux-amd64": "*"
   },
   "engines": {
     "node": ">=18"
