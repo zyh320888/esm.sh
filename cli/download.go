@@ -332,18 +332,18 @@ func DownloadDependencies(args []string) error {
     fmt.Println("处理应用文件...")
     
     // 找到所有需要编译的文件
-    scriptRegex := regexp.MustCompile(`<script\s+[^>]*src="https://esm\.sh/x"[^>]*href="([^"]+)"[^>]*>`)
+    scriptRegex := regexp.MustCompile(`<script\s+[^>]*src="https://esm\.(sh|d8d\.fun)/x"[^>]*href="([^"]+)"[^>]*>(?:</script>)?`)
     scriptMatches := scriptRegex.FindAllSubmatch(localHTML, -1)
     
     fmt.Printf("发现 %d 个应用入口文件\n", len(scriptMatches))
     
     for _, match := range scriptMatches {
-        if len(match) < 2 {
+        if len(match) < 3 {
             continue
         }
         
         // 获取相对路径
-        relPath := string(match[1])
+        relPath := string(match[2])
         fmt.Printf("发现入口文件: %s\n", relPath)
         
         // 使用入口的完整路径
@@ -365,6 +365,8 @@ func DownloadDependencies(args []string) error {
         
         // 计算编译后文件的路径
         compiledPath := strings.TrimSuffix(relPath, filepath.Ext(relPath)) + ".js"
+        // 去掉开头的./，避免./././main.js这样的重复
+        compiledPath = strings.TrimPrefix(compiledPath, "./")
         
         // 替换引用
         replacement := fmt.Sprintf(`<script type="module" src="./%s"></script>`, compiledPath)
