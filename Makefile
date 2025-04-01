@@ -13,6 +13,9 @@ dev/cli/im/add:
 dev/cli/im/update:
 	@go run -tags debug main.go im update ${package}
 
+dev/cli/download:
+	@go run -tags debug main.go download ${entry} --out-dir=${out}
+
 dev/server: config.json
 	@rm -rf .esmd/log
 	@rm -rf .esmd/storage

@@ -17,6 +17,7 @@ Commands:
   im, importmap         Manage "importmap" script.
   init                  Create a new nobuild web app with esm.sh CDN.
   serve                 Serve a nobuild web app with esm.sh CDN, HMR, transforming TS/Vue/Svelte on the fly.
+  download              Download app and all dependencies to local directory.
 `
 
 //go:embed cli/internal
@@ -37,6 +38,8 @@ func main() {
 		cli.Init(&fs)
 	case "serve":
 		cli.Serve(&fs)
+	case "download":
+		cli.DownloadDependencies(os.Args[2:])
 	default:
 		fmt.Print(helpMessage)
 	}
