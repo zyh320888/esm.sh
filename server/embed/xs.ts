@@ -10,6 +10,7 @@
  * - check-modified: 存在时检查文件是否被修改 (可选)
  * - max-age: 缓存最大有效期，单位秒，默认3600 (1小时) (可选)
  * - credentials: 存在时使用凭据请求资源 (可选)
+ * - deno-json: 指定deno.json的路径，用于获取importmap (可选)
  */
 
 const d = document;
@@ -44,6 +45,8 @@ async function run() {
   
   // 读取导入映射
   let importMap: Record<string, any> = {};
+  
+  // 1. 从HTML的script标签读取importmap
   d.querySelectorAll('script[type="importmap"]').forEach((el) => {
     try {
       const content = el.textContent;
@@ -55,6 +58,32 @@ async function run() {
       console.error("[esm.sh/xs] 导入映射解析错误", e);
     }
   });
+  
+  // 2. 如果指定了deno-json属性，从deno.json获取importmap
+  const denoJsonPath = currentScript.getAttribute("deno-json");
+  if (denoJsonPath) {
+    try {
+      const denoJsonUrl = new URL(denoJsonPath, location.href);
+      console.log(`[esm.sh/xs] 从 ${denoJsonUrl} 获取导入映射`);
+      
+      const denoJsonResponse = await fetch(denoJsonUrl.toString());
+      if (denoJsonResponse.ok) {
+        const denoJson = await denoJsonResponse.json();
+        if (denoJson.imports && typeof denoJson.imports === 'object') {
+          // 合并导入映射
+          importMap.imports = {
+            ...(importMap.imports || {}),
+            ...denoJson.imports
+          };
+          console.log("[esm.sh/xs] 已从deno.json加载导入映射");
+        }
+      } else {
+        console.error(`[esm.sh/xs] 无法获取deno.json: ${denoJsonResponse.status} ${denoJsonResponse.statusText}`);
+      }
+    } catch (e) {
+      console.error("[esm.sh/xs] 获取或解析deno.json时出错", e);
+    }
+  }
   
   // 缓存控制选项
   const target = "$TARGET"; // 构建时注入

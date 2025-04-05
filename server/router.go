@@ -378,7 +378,7 @@ func esmRouter(db Database, buildStorage storage.Storage, logger *log.Logger) re
 			}
 
 		// builtin scripts
-		case "/x", "/tsx", "/run", "/xs":
+		case "/x", "/tsx", "/run", "/xs", "/xb":
 			ifNoneMatch := ctx.R.Header.Get("If-None-Match")
 			if ifNoneMatch == globalETag && !DEBUG {
 				return rex.Status(http.StatusNotModified, nil)
@@ -710,19 +710,67 @@ func esmRouter(db Database, buildStorage storage.Storage, logger *log.Logger) re
 				return minifiedCSS
 			} else {
 				im := query.Get("im")
+				denoJson := query.Get("dj")
+				refreshParam := query.Get("refresh")
+				forceRefresh := refreshParam != ""
+				
 				h := sha1.New()
 				h.Write([]byte(modUrlRaw))
 				h.Write([]byte(im))
+				h.Write([]byte(denoJson))
 				h.Write([]byte(target))
 				h.Write([]byte(v))
+				if forceRefresh {
+					// 添加时间戳到哈希值，确保每次刷新生成不同的缓存键
+					h.Write([]byte(refreshParam))
+				}
 				savePath := normalizeSavePath(zoneIdHeader, path.Join("modules/x", hex.EncodeToString(h.Sum(nil))+".mjs"))
 				content, _, err := buildStorage.Get(savePath)
-				if err != nil && err != storage.ErrNotFound {
-					return rex.Status(500, err.Error())
+				if (err != nil && err != storage.ErrNotFound) || (forceRefresh && err != storage.ErrNotFound) {
+					// 如果是强制刷新，且文件存在，则忽略已缓存的内容
+					if forceRefresh {
+						// 允许继续执行，重新构建模块
+						err = storage.ErrNotFound
+					} else {
+						return rex.Status(500, err.Error())
+					}
 				}
 				var body io.Reader = content
 				if err == storage.ErrNotFound {
 					importMap := common.ImportMap{}
+					
+					// 处理 deno.json
+					if len(denoJson) > 0 {
+						denoJsonPath, err := atobUrl(denoJson)
+						if err != nil {
+							return rex.Status(400, "Invalid `dj` Param")
+						}
+						denoJsonUrl, err := url.Parse(modUrl.Scheme + "://" + modUrl.Host + denoJsonPath)
+						if err != nil {
+							return rex.Status(400, "Invalid `dj` Path")
+						}
+						res, err := fetchClient.Fetch(denoJsonUrl, nil)
+						if err != nil {
+							return rex.Status(500, "Failed to fetch deno.json")
+						}
+						defer res.Body.Close()
+						if res.StatusCode != 200 {
+							return rex.Status(500, "Failed to fetch deno.json")
+						}
+						var denoConfig struct {
+							Imports map[string]string `json:"imports"`
+						}
+						err = json.NewDecoder(io.LimitReader(res.Body, 5*MB)).Decode(&denoConfig)
+						if err != nil {
+							return rex.Status(400, "Invalid deno.json format")
+						}
+						if denoConfig.Imports != nil {
+							importMap.Imports = denoConfig.Imports
+							importMap.Src = denoJsonPath
+						}
+					}
+					
+					// 处理 importmap
 					if len(im) > 0 {
 						imPath, err := atobUrl(im)
 						if err != nil {
