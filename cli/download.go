@@ -293,6 +293,9 @@ func DownloadDependencies(args []string) error {
                 return
             }
             
+            // 处理包装器模块内容中的路径
+            wrapperContent = processWrapperContent(wrapperContent, apiDomain)
+            
             // 保存包装器模块
             if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
                 fmt.Printf("保存包装器模块失败: %v\n", err)
@@ -878,6 +881,9 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         return
     }
     
+    // 处理包装器模块内容中的路径
+    wrapperContent = processWrapperContent(wrapperContent, apiDomain)
+    
     // 保存包装器模块
     if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
         fmt.Printf("保存子模块失败: %v\n", err)
@@ -1168,4 +1174,28 @@ func addReactSubmodule(data *struct{ Imports map[string]string `json:"imports"` 
             fmt.Printf("添加%s模块: %s\n", fullSubModuleName, subModuleUrl)
         }
     }
+}
+
+// 处理包装器模块的内容，修正其中的导入路径
+func processWrapperContent(content []byte, apiDomain string) []byte {
+    contentStr := string(content)
+
+    // 处理裸导入路径，添加API域名前缀
+    // 如 import "/react-dom@19.0.0/es2022/react-dom.mjs" 
+    // 变为 import "/esm.d8d.fun/react-dom@19.0.0/es2022/react-dom.mjs"
+    importRegex := regexp.MustCompile(`(import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["'](\/.+?)["']`)
+    contentStr = importRegex.ReplaceAllStringFunc(contentStr, func(match string) string {
+        parts := importRegex.FindStringSubmatch(match)
+        if len(parts) >= 3 {
+            // 检查路径是否已经包含API域名
+            if !strings.Contains(parts[2], "/"+apiDomain+"/") {
+                // 替换为带API域名的路径
+                newPath := "/" + apiDomain + parts[2]
+                return strings.Replace(match, parts[2], newPath, 1)
+            }
+        }
+        return match
+    })
+
+    return []byte(contentStr)
 } 
