@@ -20,6 +20,8 @@ type DependencyInfo struct {
 
 // 共享的模块映射，由下载过程填充
 var globalModuleMap map[string]string
+// 跟踪已经下载过的模块，避免重复下载
+var downloadedModules map[string]bool
 // 是否压缩代码
 var minify bool
 // API 基础 URL
@@ -39,6 +41,8 @@ func DownloadDependencies(args []string) error {
     
     // 初始化全局模块映射
     globalModuleMap = make(map[string]string)
+    // 初始化已下载模块集合
+    downloadedModules = make(map[string]bool)
     
     if len(args) < 1 {
         return fmt.Errorf("请指定入口文件或目录")
@@ -243,8 +247,8 @@ func DownloadDependencies(args []string) error {
             matches := moduleRegex.FindStringSubmatch(url)
             
             var modulePath string
-            if len(matches) > 2 {
-                modulePath = matches[2]
+            if len(matches) > 1 {
+                modulePath = matches[1]
                 // 处理URL中的查询参数
                 if strings.Contains(modulePath, "?") {
                     modulePath = strings.Split(modulePath, "?")[0]
@@ -287,6 +291,9 @@ func DownloadDependencies(args []string) error {
                 errChan <- fmt.Errorf("创建子模块目录失败: %v", err)
                 return
             }
+            
+            // 标记该URL已经处理过，避免重复下载
+            downloadedModules[url] = true
             
             fmt.Printf("下载包装器模块: %s，保存到: %s\n", url, wrapperPath)
             wrapperContent, err := fetchContent(url)
@@ -352,6 +359,16 @@ func DownloadDependencies(args []string) error {
                 // 使用不带查询参数的路径作为本地路径
                 localPath := filepath.Join(esmDir, actualPath)
                 
+                // 检查是否已下载过此模块，避免重复下载
+                if downloadedModules[actualUrl] {
+                    fmt.Printf("模块已下载过，跳过: %s\n", actualUrl)
+                    actualPaths = append(actualPaths, actualPath)
+                    continue
+                }
+                
+                // 标记该URL已经处理过
+                downloadedModules[actualUrl] = true
+                
                 fmt.Printf("下载实际模块: %s\n", actualUrl)
                 actualContent, err := fetchContent(actualUrl)
                 if err != nil {
@@ -376,6 +393,21 @@ func DownloadDependencies(args []string) error {
                 }
                 
                 actualPaths = append(actualPaths, actualPath)
+                
+                // 在这里立即对下载的实际模块进行递归分析
+                // 提取模块中的深层依赖
+                depPaths := findDeepDependencies(actualContent)
+                for _, depPath := range depPaths {
+                    depUrl := apiBaseURL + depPath
+                    if !downloadedModules[depUrl] {
+                        // 使用新的goroutine递归处理依赖
+                        wg.Add(1)
+                        go func(depPath, depUrl string) {
+                            defer wg.Done()
+                            downloadSubModule("", depPath, depUrl, outDir, semaphore, errChan)
+                        }(depPath, depUrl)
+                    }
+                }
             }
             
             // 现在处理包装器模块内容中的路径 (在处理所有实际模块后)
@@ -854,6 +886,14 @@ func compileFile(content string, filename string) (string, error) {
 
 // 下载子模块
 func downloadSubModule(parentModule, subModule, url, outDir string, semaphore chan struct{}, errChan chan error) {
+    // 检查是否已下载过此模块
+    moduleKey := url
+    if downloadedModules[moduleKey] {
+        fmt.Printf("模块已下载过，跳过: %s\n", url)
+        return
+    }
+    downloadedModules[moduleKey] = true
+    
     fmt.Printf("准备下载子模块: %s\n", subModule)
     
     semaphore <- struct{}{}
@@ -932,6 +972,20 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         }
         
         globalModuleMap[subModule] = "/" + modulePath + ".js"
+        
+        // 分析包装器模块中的依赖
+        bareImports := findBareImports(wrapperContent)
+        for _, dep := range bareImports {
+            if !isLocalPath(dep) && !strings.HasPrefix(dep, "/") {
+                // 构建子依赖的URL
+                depURL := constructDependencyURL(dep, apiBaseURL)
+                if depURL != "" && !downloadedModules[depURL] {
+                    // 递归下载子依赖
+                    go downloadSubModule("", dep, depURL, outDir, semaphore, errChan)
+                }
+            }
+        }
+        
         return
     }
     
@@ -984,6 +1038,19 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         }
         
         actualPaths = append(actualPaths, actualPath)
+        
+        // 分析实际模块中的依赖
+        bareImports := findBareImports(actualContent)
+        for _, dep := range bareImports {
+            if !isLocalPath(dep) && !strings.HasPrefix(dep, "/") {
+                // 构建子依赖的URL
+                depURL := constructDependencyURL(dep, apiBaseURL)
+                if depURL != "" && !downloadedModules[depURL] {
+                    // 递归下载子依赖
+                    go downloadSubModule("", dep, depURL, outDir, semaphore, errChan)
+                }
+            }
+        }
     }
     
     // 处理包装器模块内容中的路径（在提取和下载实际模块后）
@@ -1002,6 +1069,73 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
                actualPaths, modulePath + ".js")
     
     fmt.Printf("子模块下载成功: %s\n", subModule)
+}
+
+// 判断是否为本地路径
+func isLocalPath(path string) bool {
+    return strings.HasPrefix(path, ".") || strings.HasPrefix(path, "/")
+}
+
+// 查找模块中的裸导入（不带路径前缀的导入）
+func findBareImports(content []byte) []string {
+    // 使用正则表达式找出所有import语句中的裸导入
+    importRegex := regexp.MustCompile(`(?:import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["']([^"'./][^"']+)["']`)
+    matches := importRegex.FindAllSubmatch(content, -1)
+    
+    var bareImports []string
+    for _, match := range matches {
+        if len(match) >= 2 {
+            bareImport := string(match[1])
+            // 排除已有的URL格式导入
+            if !strings.HasPrefix(bareImport, "http") {
+                bareImports = append(bareImports, bareImport)
+            }
+        }
+    }
+    
+    return bareImports
+}
+
+// 构建依赖的URL
+func constructDependencyURL(dep, apiBaseURL string) string {
+    // 处理可能的子模块
+    var baseModule, subModule string
+    if idx := strings.Index(dep, "/"); idx != -1 {
+        baseModule = dep[:idx]
+        subModule = dep[idx+1:]
+    } else {
+        baseModule = dep
+        subModule = ""
+    }
+    
+    // 查找依赖是否已在importmap中
+    for spec, url := range globalModuleMap {
+        if spec == dep {
+            return url
+        }
+    }
+    
+    // 从已下载模块中查找版本信息
+    var version string
+    for url := range downloadedModules {
+        versionRegex := regexp.MustCompile(`/` + regexp.QuoteMeta(baseModule) + `@([\d\.]+)`)
+        matches := versionRegex.FindStringSubmatch(url)
+        if len(matches) > 1 {
+            version = matches[1]
+            break
+        }
+    }
+    
+    if version == "" {
+        // 无法确定版本，使用最新版本
+        version = "latest"
+    }
+    
+    if subModule == "" {
+        return fmt.Sprintf("%s/%s@%s", apiBaseURL, baseModule, version)
+    } else {
+        return fmt.Sprintf("%s/%s@%s/%s", apiBaseURL, baseModule, version, subModule)
+    }
 }
 
 // 编译应用文件并处理其所有本地依赖
@@ -1271,4 +1405,26 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
     })
 
     return []byte(contentStr)
+}
+
+// 从模块内容中找出深层依赖
+func findDeepDependencies(content []byte) []string {
+    // 提取形如 "/react-dom@19.0.0/es2022/react-dom.mjs" 的依赖路径
+    dependencyRegex := regexp.MustCompile(`(?:import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["'](\/[@\w\d\.\-]+\/[^"']+)["']`)
+    matches := dependencyRegex.FindAllSubmatch(content, -1)
+    
+    var deps []string
+    seen := make(map[string]bool)
+    
+    for _, match := range matches {
+        if len(match) >= 2 {
+            dep := string(match[1])
+            if !seen[dep] {
+                seen[dep] = true
+                deps = append(deps, dep)
+            }
+        }
+    }
+    
+    return deps
 } 
