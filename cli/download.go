@@ -304,7 +304,7 @@ func DownloadDependencies(args []string) error {
             }
             
             // 从包装器模块中提取实际模块路径 (在处理内容之前)
-            exportRegex := regexp.MustCompile(`(?:import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["'](\/[^"']+?)["']`)
+            exportRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[^"']+?)["']`)
             exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
             
             if len(exportMatches) == 0 {
@@ -955,7 +955,7 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
     }
     
     // 从包装器模块中提取实际模块路径（先提取再处理内容）
-    exportRegex := regexp.MustCompile(`(?:import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["'](\/[^"']+?)["']`)
+    exportRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[^"']+?)["']`)
     exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
     
     if len(exportMatches) == 0 {
@@ -1410,7 +1410,7 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
 // 从模块内容中找出深层依赖
 func findDeepDependencies(content []byte) []string {
     // 提取形如 "/react-dom@19.0.0/es2022/react-dom.mjs" 的依赖路径
-    dependencyRegex := regexp.MustCompile(`(?:import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["'](\/[@\w\d\.\-]+\/[^"']+)["']`)
+    dependencyRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[@\w\d\.\-]+\/[^"']+)["']`)
     matches := dependencyRegex.FindAllSubmatch(content, -1)
     
     var deps []string
