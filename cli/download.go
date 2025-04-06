@@ -1213,7 +1213,13 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
             // 检查路径是否已经包含API域名
             if !strings.Contains(parts[2], "/"+apiDomain+"/") {
                 // 替换为带API域名的路径
-                newPath := "/" + apiDomain + parts[2]
+                var newPath string
+                if basePath != "" && !strings.HasPrefix(parts[2], basePath) {
+                    // 如果设置了basePath，添加前缀
+                    newPath = basePath + "/" + apiDomain + parts[2]
+                } else {
+                    newPath = "/" + apiDomain + parts[2]
+                }
                 return strings.Replace(match, parts[2], newPath, 1)
             }
         }
