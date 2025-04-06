@@ -293,22 +293,23 @@ func DownloadDependencies(args []string) error {
                 return
             }
             
-            // 处理包装器模块内容中的路径
-            wrapperContent = processWrapperContent(wrapperContent, apiDomain)
-            
-            // 保存包装器模块
-            if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
-                fmt.Printf("保存包装器模块失败: %v\n", err)
-                errChan <- fmt.Errorf("保存包装器模块失败: %v", err)
-                return
-            }
-            
-            // 从包装器模块中提取实际模块路径
+            // 从包装器模块中提取实际模块路径 (在处理内容之前)
             exportRegex := regexp.MustCompile(`["']([^"']+\.mjs)["']`)
             exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
             
             if len(exportMatches) == 0 {
                 fmt.Printf("未在包装器模块中找到实际模块路径\n")
+                // 先处理包装器模块内容中的路径
+                apiDomain := getAPIDomain()
+                wrapperContent = processWrapperContent(wrapperContent, apiDomain)
+                
+                // 保存包装器模块
+                if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
+                    fmt.Printf("保存包装器模块失败: %v\n", err)
+                    errChan <- fmt.Errorf("保存包装器模块失败: %v", err)
+                    return
+                }
+                
                 // 仍然记为成功，因为我们已经下载了包装器模块
                 if strings.Contains(spec, "/") {
                     // 子模块情况，使用子模块的完整路径
@@ -362,6 +363,17 @@ func DownloadDependencies(args []string) error {
                 }
                 
                 actualPaths = append(actualPaths, actualPath)
+            }
+            
+            // 现在处理包装器模块内容中的路径 (在处理所有实际模块后)
+            apiDomain := getAPIDomain()
+            wrapperContent = processWrapperContent(wrapperContent, apiDomain)
+            
+            // 保存包装器模块
+            if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
+                fmt.Printf("保存包装器模块失败: %v\n", err)
+                errChan <- fmt.Errorf("保存包装器模块失败: %v", err)
+                return
             }
             
             // 子模块不存在实际模块路径的处理
@@ -881,22 +893,23 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         return
     }
     
-    // 处理包装器模块内容中的路径
-    wrapperContent = processWrapperContent(wrapperContent, apiDomain)
-    
-    // 保存包装器模块
-    if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
-        fmt.Printf("保存子模块失败: %v\n", err)
-        errChan <- fmt.Errorf("保存子模块失败: %v", err)
-        return
-    }
-    
-    // 从包装器模块中提取实际模块路径
+    // 从包装器模块中提取实际模块路径（先提取再处理内容）
     exportRegex := regexp.MustCompile(`["']([^"']+\.mjs)["']`)
     exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
     
     if len(exportMatches) == 0 {
         fmt.Printf("未在子模块中找到实际模块路径\n")
+        
+        // 处理包装器模块内容中的路径
+        wrapperContent = processWrapperContent(wrapperContent, apiDomain)
+        
+        // 保存包装器模块
+        if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
+            fmt.Printf("保存子模块失败: %v\n", err)
+            errChan <- fmt.Errorf("保存子模块失败: %v", err)
+            return
+        }
+        
         globalModuleMap[subModule] = "/" + modulePath + ".js"
         return
     }
@@ -940,6 +953,16 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         }
         
         actualPaths = append(actualPaths, actualPath)
+    }
+    
+    // 处理包装器模块内容中的路径（在提取和下载实际模块后）
+    wrapperContent = processWrapperContent(wrapperContent, apiDomain)
+    
+    // 保存包装器模块
+    if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
+        fmt.Printf("保存子模块失败: %v\n", err)
+        errChan <- fmt.Errorf("保存子模块失败: %v", err)
+        return
     }
     
     // 保存映射到包装器模块而非实际模块
