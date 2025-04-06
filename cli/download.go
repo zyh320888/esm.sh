@@ -294,7 +294,7 @@ func DownloadDependencies(args []string) error {
             }
             
             // 从包装器模块中提取实际模块路径 (在处理内容之前)
-            exportRegex := regexp.MustCompile(`["']([^"']+\.mjs)["']`)
+            exportRegex := regexp.MustCompile(`(?:import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["'](\/[^"']+?)["']`)
             exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
             
             if len(exportMatches) == 0 {
@@ -894,7 +894,7 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
     }
     
     // 从包装器模块中提取实际模块路径（先提取再处理内容）
-    exportRegex := regexp.MustCompile(`["']([^"']+\.mjs)["']`)
+    exportRegex := regexp.MustCompile(`(?:import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["'](\/[^"']+?)["']`)
     exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
     
     if len(exportMatches) == 0 {
