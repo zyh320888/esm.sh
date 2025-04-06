@@ -24,6 +24,10 @@ var globalModuleMap map[string]string
 var minify bool
 // API 基础 URL
 var apiBaseURL string
+// deno.json文件路径
+var denoJsonPath string
+// 基础路径，用于生成URL时添加前缀
+var basePath string
 
 // 获取API域名部分，用于路径处理
 func getAPIDomain() string {
@@ -45,6 +49,10 @@ func DownloadDependencies(args []string) error {
     minify = false
     // 默认使用 esm.sh 作为 API 基础 URL
     apiBaseURL = "https://esm.sh"
+    // 默认deno.json路径为空
+    denoJsonPath = ""
+    // 默认basePath为空
+    basePath = ""
     
     fmt.Printf("入口路径: %s\n", entryPath)
     
@@ -61,6 +69,21 @@ func DownloadDependencies(args []string) error {
             apiBaseURL = args[i+1]
             fmt.Printf("使用API基础URL: %s\n", apiBaseURL)
             i++
+        } else if args[i] == "--deno-json" && i+1 < len(args) {
+            denoJsonPath = args[i+1]
+            fmt.Printf("使用deno.json路径: %s\n", denoJsonPath)
+            i++
+        } else if args[i] == "--base-path" && i+1 < len(args) {
+            basePath = args[i+1]
+            // 确保basePath以/开头但不以/结尾
+            if !strings.HasPrefix(basePath, "/") {
+                basePath = "/" + basePath
+            }
+            if strings.HasSuffix(basePath, "/") {
+                basePath = basePath[:len(basePath)-1]
+            }
+            fmt.Printf("使用基础路径: %s\n", basePath)
+            i++
         }
     }
 
@@ -71,6 +94,8 @@ func DownloadDependencies(args []string) error {
         return fmt.Errorf("获取入口信息失败: %v", err)
     }
 
+    // 判断入口文件类型
+    var actualEntryPath string
     var indexHtmlPath string
     if fileInfo.IsDir() {
         // 如果是目录，尝试找到 index.html
@@ -81,50 +106,94 @@ func DownloadDependencies(args []string) error {
             return fmt.Errorf("在目录 %s 中未找到 index.html: %v", entryPath, err)
         }
         fmt.Printf("找到入口文件: %s\n", indexHtmlPath)
+        actualEntryPath = indexHtmlPath
     } else {
-        // 如果是文件，直接使用
-        indexHtmlPath = entryPath
-    }
-
-    // 1. 读取入口文件
-    fmt.Printf("正在读取入口文件: %s\n", indexHtmlPath)
-    entryContent, err := os.ReadFile(indexHtmlPath)
-    if err != nil {
-        fmt.Printf("读取入口文件失败: %v\n", err)
-        return fmt.Errorf("读取入口文件失败: %v", err)
-    }
-    fmt.Println("入口文件读取成功")
-
-    // 2. 解析 importmap
-    fmt.Println("正在解析 importmap...")
-    
-    // 使用正则表达式从 HTML 中提取 importmap
-    importMapRegex := regexp.MustCompile(`<script\s+type="importmap"\s*>([\s\S]*?)<\/script>`)
-    matches := importMapRegex.FindSubmatch(entryContent)
-    
-    if len(matches) < 2 {
-        fmt.Println("未在入口文件中找到 importmap")
-        return fmt.Errorf("未在入口文件中找到 importmap")
+        // 直接使用文件
+        actualEntryPath = entryPath
     }
     
-    importMapJson := matches[1]
-    fmt.Printf("找到 importmap: %s\n", string(importMapJson))
+    // 判断入口文件扩展名
+    fileExt := filepath.Ext(actualEntryPath)
+    fmt.Printf("入口文件扩展名: %s\n", fileExt)
+    
+    // 检查是否为前端源文件
+    isFrontendSource := fileExt == ".tsx" || fileExt == ".ts" || fileExt == ".jsx" || fileExt == ".js"
+    
+    // 前端源文件需要指定deno.json
+    if isFrontendSource && denoJsonPath == "" {
+        fmt.Printf("入口文件是前端源文件 (%s)，需要同时指定 deno.json 文件\n", fileExt)
+        return fmt.Errorf("入口文件是前端源文件 (%s)，需要同时使用 --deno-json 指定 deno.json 文件", fileExt)
+    }
     
     var importMapData struct {
         Imports map[string]string `json:"imports"`
     }
+    var entryContent []byte
     
-    if err := json.Unmarshal(importMapJson, &importMapData); err != nil {
-        fmt.Printf("解析 importmap 失败: %v\n", err)
-        return fmt.Errorf("解析 importmap 失败: %v", err)
+    // 如果指定了deno.json文件路径，从deno.json读取importmap
+    if denoJsonPath != "" {
+        fmt.Printf("使用指定的deno.json文件: %s\n", denoJsonPath)
+        
+        // 读取deno.json文件
+        denoJsonContent, err := os.ReadFile(denoJsonPath)
+        if err != nil {
+            fmt.Printf("读取deno.json文件失败: %v\n", err)
+            return fmt.Errorf("读取deno.json文件失败: %v", err)
+        }
+        
+        // 解析deno.json内容
+        if err := json.Unmarshal(denoJsonContent, &importMapData); err != nil {
+            fmt.Printf("解析deno.json内容失败: %v\n", err)
+            return fmt.Errorf("解析deno.json内容失败: %v", err)
+        }
+        
+        if importMapData.Imports == nil {
+            fmt.Println("deno.json不包含有效的imports字段")
+            return fmt.Errorf("deno.json不包含有效的imports字段")
+        }
+        
+        fmt.Printf("从deno.json解析到的importmap: %v\n", importMapData.Imports)
+    } else {
+        // 从HTML中解析importmap
+        // 如果是HTML文件，从中解析importmap
+        fmt.Printf("入口文件是HTML文件，从中解析importmap\n")
+        
+        // 读取入口文件
+        fmt.Printf("正在读取入口文件: %s\n", actualEntryPath)
+        entryContent, err = os.ReadFile(actualEntryPath)
+        if err != nil {
+            fmt.Printf("读取入口文件失败: %v\n", err)
+            return fmt.Errorf("读取入口文件失败: %v", err)
+        }
+        fmt.Println("入口文件读取成功")
+        
+        // 解析 importmap
+        fmt.Println("正在解析 importmap...")
+        
+        // 使用正则表达式从 HTML 中提取 importmap
+        importMapRegex := regexp.MustCompile(`<script\s+type="importmap"\s*>([\s\S]*?)<\/script>`)
+        matches := importMapRegex.FindSubmatch(entryContent)
+        
+        if len(matches) < 2 {
+            fmt.Println("未在入口文件中找到 importmap")
+            return fmt.Errorf("未在入口文件中找到 importmap")
+        }
+        
+        importMapJson := matches[1]
+        fmt.Printf("找到 importmap: %s\n", string(importMapJson))
+        
+        if err := json.Unmarshal(importMapJson, &importMapData); err != nil {
+            fmt.Printf("解析 importmap 失败: %v\n", err)
+            return fmt.Errorf("解析 importmap 失败: %v", err)
+        }
+        
+        if importMapData.Imports == nil {
+            fmt.Println("importmap 不包含有效的 imports 字段")
+            return fmt.Errorf("importmap 不包含有效的 imports 字段")
+        }
+        
+        fmt.Printf("解析到的 importmap: %v\n", importMapData.Imports)
     }
-    
-    if importMapData.Imports == nil {
-        fmt.Println("importmap 不包含有效的 imports 字段")
-        return fmt.Errorf("importmap 不包含有效的 imports 字段")
-    }
-    
-    fmt.Printf("解析到的 importmap: %v\n", importMapData.Imports)
 
     // 3. 创建输出目录
     fmt.Printf("正在创建输出目录: %s\n", outDir)
@@ -310,22 +379,49 @@ func DownloadDependencies(args []string) error {
             return fmt.Errorf("复制项目文件失败: %v", err)
         }
     } else {
-        // 如果是单个文件，只复制这个文件
-        fmt.Printf("正在复制入口文件到输出目录: %s\n", entryPath)
-        targetPath := filepath.Join(outDir, filepath.Base(entryPath))
-        if err := os.WriteFile(targetPath, entryContent, 0644); err != nil {
-            fmt.Printf("保存入口文件失败: %v\n", err)
-            return fmt.Errorf("保存入口文件失败: %v", err)
+        // 检查是否为前端源文件
+        if isFrontendSource {
+            // 如果是前端源文件，直接编译该文件
+            fmt.Printf("入口文件是前端源文件，直接编译处理: %s\n", actualEntryPath)
+            
+            // 获取源文件的相对路径
+            relPath := filepath.Base(actualEntryPath)
+            
+            // 编译应用文件
+            if err := compileAppFilesWithPath(actualEntryPath, relPath, outDir); err != nil {
+                fmt.Printf("编译前端源文件失败: %v\n", err)
+                return fmt.Errorf("编译前端源文件失败: %v", err)
+            }
+            
+            fmt.Printf("前端源文件编译完成: %s\n", actualEntryPath)
+        } else {
+            // 如果是单个HTML文件，复制这个文件
+            fmt.Printf("正在复制入口文件到输出目录: %s\n", entryPath)
+            targetPath := filepath.Join(outDir, filepath.Base(entryPath))
+            if err := os.WriteFile(targetPath, entryContent, 0644); err != nil {
+                fmt.Printf("保存入口文件失败: %v\n", err)
+                return fmt.Errorf("保存入口文件失败: %v", err)
+            }
         }
     }
 
     // 6. 生成本地 importmap
     fmt.Println("生成本地 importmap...")
     
+    // 如果设置了basePath，则修改路径
+    localModuleMap := make(map[string]string)
+    for spec, path := range moduleMap {
+        if basePath != "" && strings.HasPrefix(path, "/") {
+            localModuleMap[spec] = basePath + path
+        } else {
+            localModuleMap[spec] = path
+        }
+    }
+    
     localImportMap := struct {
         Imports map[string]string `json:"imports"`
     }{
-        Imports: moduleMap,
+        Imports: localModuleMap,
     }
     
     importMapContent, err := json.MarshalIndent(localImportMap, "", "  ")
@@ -339,69 +435,83 @@ func DownloadDependencies(args []string) error {
         return fmt.Errorf("保存本地 importmap 失败: %v", err)
     }
     
-    // 7. 修改输出目录中的 index.html
-    fmt.Println("修改输出目录中的 index.html...")
-    
-    // 读取输出目录中的 index.html
+    // 7. 修改输出目录中的 index.html (如果存在)
     outputIndexPath := filepath.Join(outDir, "index.html")
-    outputIndexContent, err := os.ReadFile(outputIndexPath)
-    if err != nil {
-        fmt.Printf("读取输出目录中的 index.html 失败: %v\n", err)
-        return fmt.Errorf("读取输出目录中的 index.html 失败: %v", err)
-    }
-    
-    // 替换 importmap
-    localHTML := regexp.MustCompile(`<script\s+type="importmap"\s*>[\s\S]*?<\/script>`).
-        ReplaceAll(outputIndexContent, []byte(`<script type="importmap" src="./importmap.json"></script>`))
-    
-    // 8. 处理应用文件 - 查找并处理所有需要编译的本地文件
-    fmt.Println("处理应用文件...")
-    
-    // 找到所有需要编译的文件
-    scriptRegex := regexp.MustCompile(`<script\s+[^>]*src="https://esm\.(sh|d8d\.fun)/x"[^>]*href="([^"]+)"[^>]*>(?:</script>)?`)
-    scriptMatches := scriptRegex.FindAllSubmatch(localHTML, -1)
-    
-    fmt.Printf("发现 %d 个应用入口文件\n", len(scriptMatches))
-    
-    for _, match := range scriptMatches {
-        if len(match) < 3 {
-            continue
-        }
+    if _, err := os.Stat(outputIndexPath); err == nil && !isFrontendSource {
+        fmt.Println("修改输出目录中的 index.html...")
         
-        // 获取相对路径
-        relPath := string(match[2])
-        fmt.Printf("发现入口文件: %s\n", relPath)
-        
-        // 使用入口的完整路径
-        fullPath := filepath.Join(filepath.Dir(indexHtmlPath), relPath)
-        fmt.Printf("使用源文件的完整路径: %s\n", fullPath)
-        
-        // 编译前检查路径
-        if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-            fmt.Printf("警告: 源文件不存在: %s\n", fullPath)
-            return fmt.Errorf("源文件不存在: %s", fullPath)
-        }
-        
-        // 修改compileAppFiles调用，传入入口文件的完整路径和相对路径
-        err = compileAppFilesWithPath(fullPath, relPath, outDir)
+        // 读取输出目录中的 index.html
+        outputIndexContent, err := os.ReadFile(outputIndexPath)
         if err != nil {
-            fmt.Printf("编译应用文件失败: %v\n", err)
-            return fmt.Errorf("编译应用文件失败: %v", err)
+            fmt.Printf("读取输出目录中的 index.html 失败: %v\n", err)
+            return fmt.Errorf("读取输出目录中的 index.html 失败: %v", err)
         }
         
-        // 计算编译后文件的路径
-        compiledPath := strings.TrimSuffix(relPath, filepath.Ext(relPath)) + ".js"
-        // 去掉开头的./，避免./././main.js这样的重复
-        compiledPath = strings.TrimPrefix(compiledPath, "./")
+        // 替换 importmap
+        localHTML := regexp.MustCompile(`<script\s+type="importmap"\s*>[\s\S]*?<\/script>`).
+            ReplaceAll(outputIndexContent, []byte(`<script type="importmap" src="./importmap.json"></script>`))
         
-        // 替换引用
-        replacement := fmt.Sprintf(`<script type="module" src="./%s"></script>`, compiledPath)
-        localHTML = scriptRegex.ReplaceAll(localHTML, []byte(replacement))
-    }
-    
-    if err := os.WriteFile(outputIndexPath, localHTML, 0644); err != nil {
-        fmt.Printf("保存修改后的 index.html 失败: %v\n", err)
-        return fmt.Errorf("保存修改后的 index.html 失败: %v", err)
+        // 如果配置了basePath，需要更新importmap引用
+        if basePath != "" {
+            // 替换为带basePath的路径
+            localHTML = regexp.MustCompile(`<script\s+type="importmap"\s*src="./importmap.json"\s*></script>`).
+                ReplaceAll(localHTML, []byte(fmt.Sprintf(`<script type="importmap" src="%s/importmap.json"></script>`, basePath)))
+        }
+        
+        // 8. 处理应用文件 - 查找并处理所有需要编译的本地文件
+        fmt.Println("处理应用文件...")
+        
+        // 找到所有需要编译的文件
+        scriptRegex := regexp.MustCompile(`<script\s+[^>]*src="https://esm\.(sh|d8d\.fun)/x"[^>]*href="([^"]+)"[^>]*>(?:</script>)?`)
+        scriptMatches := scriptRegex.FindAllSubmatch(localHTML, -1)
+        
+        fmt.Printf("发现 %d 个应用入口文件\n", len(scriptMatches))
+        
+        for _, match := range scriptMatches {
+            if len(match) < 3 {
+                continue
+            }
+            
+            // 获取相对路径
+            relPath := string(match[2])
+            fmt.Printf("发现入口文件: %s\n", relPath)
+            
+            // 使用入口的完整路径
+            fullPath := filepath.Join(filepath.Dir(indexHtmlPath), relPath)
+            fmt.Printf("使用源文件的完整路径: %s\n", fullPath)
+            
+            // 编译前检查路径
+            if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+                fmt.Printf("警告: 源文件不存在: %s\n", fullPath)
+                return fmt.Errorf("源文件不存在: %s", fullPath)
+            }
+            
+            // 修改compileAppFiles调用，传入入口文件的完整路径和相对路径
+            err = compileAppFilesWithPath(fullPath, relPath, outDir)
+            if err != nil {
+                fmt.Printf("编译应用文件失败: %v\n", err)
+                return fmt.Errorf("编译应用文件失败: %v", err)
+            }
+            
+            // 计算编译后文件的路径
+            compiledPath := strings.TrimSuffix(relPath, filepath.Ext(relPath)) + ".js"
+            // 去掉开头的./，避免./././main.js这样的重复
+            compiledPath = strings.TrimPrefix(compiledPath, "./")
+            
+            // 替换引用，添加basePath支持
+            var replacement string
+            if basePath != "" {
+                replacement = fmt.Sprintf(`<script type="module" src="%s/%s"></script>`, basePath, compiledPath)
+            } else {
+                replacement = fmt.Sprintf(`<script type="module" src="./%s"></script>`, compiledPath)
+            }
+            localHTML = scriptRegex.ReplaceAll(localHTML, []byte(replacement))
+        }
+        
+        if err := os.WriteFile(outputIndexPath, localHTML, 0644); err != nil {
+            fmt.Printf("保存修改后的 index.html 失败: %v\n", err)
+            return fmt.Errorf("保存修改后的 index.html 失败: %v", err)
+        }
     }
 
     fmt.Printf("下载完成！所有文件已保存到 %s 目录\n", outDir)
@@ -639,7 +749,12 @@ func compileFile(content string, filename string) (string, error) {
     // 添加路径替换，处理相对路径引用
     // 例如将 "/react-dom@19.1.0/es2022/react-dom.mjs" 替换为 "/esm.sh/react-dom@19.1.0/es2022/react-dom.mjs"
     pathRegex := regexp.MustCompile(`from\s+["'](\/([@\w\d\.-]+)\/[^"']+)["']`)
-    compiledCode = pathRegex.ReplaceAllString(compiledCode, `from "/` + apiDomain + `$1"`)
+    if basePath != "" {
+        // 如果设置了basePath，添加前缀
+        compiledCode = pathRegex.ReplaceAllString(compiledCode, `from "` + basePath + `/` + apiDomain + `$1"`)
+    } else {
+        compiledCode = pathRegex.ReplaceAllString(compiledCode, `from "/` + apiDomain + `$1"`)
+    }
     
     // 替换本地相对路径引用的扩展名（.tsx/.ts/.jsx -> .js）
     localImportRegex := regexp.MustCompile(`from\s+["'](\.[^"']+)(\.tsx|\.ts|\.jsx)["']`)

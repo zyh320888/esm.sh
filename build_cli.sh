@@ -1,0 +1,1 @@
+go build -o esm.d8d.fun main.go

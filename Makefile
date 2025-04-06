@@ -14,7 +14,7 @@ dev/cli/im/update:
 	@go run -tags debug main.go im update ${package}
 
 dev/cli/download:
-	@go run -tags debug main.go download ${entry} --out-dir=${out}
+	@go run -tags debug main.go download ${entry} --out-dir=${out} ${basePath:+--base-path=${basePath}} ${denoJson:+--deno-json=${denoJson}}
 
 dev/server: config.json
 	@rm -rf .esmd/log
