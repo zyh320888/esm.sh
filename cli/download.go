@@ -243,15 +243,18 @@ func DownloadDependencies(args []string) error {
             matches := moduleRegex.FindStringSubmatch(url)
             
             var modulePath string
-            if len(matches) > 1 {
-                modulePath = matches[1]
+            if len(matches) > 2 {
+                modulePath = matches[2]
                 // 处理URL中的查询参数
                 if strings.Contains(modulePath, "?") {
                     modulePath = strings.Split(modulePath, "?")[0]
                 }
             } else {
-                // 如果URL不符合格式，使用spec作为模块路径
                 modulePath = spec
+                // 处理spec中可能的查询参数
+                if strings.Contains(modulePath, "?") {
+                    modulePath = strings.Split(modulePath, "?")[0]
+                }
             }
             
             fmt.Printf("从URL中提取的模块路径: %s\n", modulePath)
@@ -336,7 +339,17 @@ func DownloadDependencies(args []string) error {
                     actualPath = "/" + actualPath
                 }
                 
-                actualUrl := apiBaseURL + actualPath
+                // 保存原始路径（带查询参数）用于URL请求
+                originalPath := actualPath
+                
+                // 去除路径中的查询参数，用于文件系统路径
+                if strings.Contains(actualPath, "?") {
+                    actualPath = strings.Split(actualPath, "?")[0]
+                }
+                
+                // 使用带查询参数的URL进行请求
+                actualUrl := apiBaseURL + originalPath
+                // 使用不带查询参数的路径作为本地路径
                 localPath := filepath.Join(esmDir, actualPath)
                 
                 fmt.Printf("下载实际模块: %s\n", actualUrl)
@@ -853,8 +866,16 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
     var modulePath string
     if len(matches) > 2 {
         modulePath = matches[2]
+        // 处理URL中的查询参数
+        if strings.Contains(modulePath, "?") {
+            modulePath = strings.Split(modulePath, "?")[0]
+        }
     } else {
         modulePath = subModule
+        // 处理subModule中可能的查询参数
+        if strings.Contains(modulePath, "?") {
+            modulePath = strings.Split(modulePath, "?")[0]
+        }
     }
     
     // 提取域名部分，用于后续处理
@@ -926,7 +947,17 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
             actualPath = "/" + actualPath
         }
         
-        actualUrl := apiBaseURL + actualPath
+        // 保存原始路径（带查询参数）用于URL请求
+        originalPath := actualPath
+        
+        // 去除路径中的查询参数，用于文件系统路径
+        if strings.Contains(actualPath, "?") {
+            actualPath = strings.Split(actualPath, "?")[0]
+        }
+        
+        // 使用带查询参数的URL进行请求
+        actualUrl := apiBaseURL + originalPath
+        // 使用不带查询参数的路径作为本地路径
         localPath := filepath.Join(esmDir, actualPath)
         
         fmt.Printf("下载子模块实际文件: %s\n", actualUrl)
@@ -1210,17 +1241,30 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
     contentStr = importRegex.ReplaceAllStringFunc(contentStr, func(match string) string {
         parts := importRegex.FindStringSubmatch(match)
         if len(parts) >= 3 {
+            originalPath := parts[2]
+            
             // 检查路径是否已经包含API域名
-            if !strings.Contains(parts[2], "/"+apiDomain+"/") {
+            if !strings.Contains(originalPath, "/"+apiDomain+"/") {
+                // 分离路径和查询参数
+                path := originalPath
+                var query string
+                if strings.Contains(path, "?") {
+                    pathParts := strings.SplitN(path, "?", 2)
+                    path = pathParts[0]
+                    query = "?" + pathParts[1]
+                } else {
+                    query = ""
+                }
+                
                 // 替换为带API域名的路径
                 var newPath string
-                if basePath != "" && !strings.HasPrefix(parts[2], basePath) {
+                if basePath != "" && !strings.HasPrefix(path, basePath) {
                     // 如果设置了basePath，添加前缀
-                    newPath = basePath + "/" + apiDomain + parts[2]
+                    newPath = basePath + "/" + apiDomain + path + query
                 } else {
-                    newPath = "/" + apiDomain + parts[2]
+                    newPath = "/" + apiDomain + path + query
                 }
-                return strings.Replace(match, parts[2], newPath, 1)
+                return strings.Replace(match, originalPath, newPath, 1)
             }
         }
         return match
