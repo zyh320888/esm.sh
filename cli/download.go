@@ -153,6 +153,9 @@ func DownloadDependencies(args []string) error {
         }
         
         fmt.Printf("从deno.json解析到的importmap: %v\n", importMapData.Imports)
+        
+        // 自动添加常用的React相关子模块
+        addReactJsxRuntime(&importMapData)
     } else {
         // 从HTML中解析importmap
         // 如果是HTML文件，从中解析importmap
@@ -193,6 +196,9 @@ func DownloadDependencies(args []string) error {
         }
         
         fmt.Printf("解析到的 importmap: %v\n", importMapData.Imports)
+        
+        // 自动添加常用的React相关子模块
+        addReactJsxRuntime(&importMapData)
     }
 
     // 3. 创建输出目录
@@ -1112,4 +1118,54 @@ func resolveImportPath(baseDir, importPath string) string {
     
     // 返回相对于项目根目录的路径
     return filepath.Clean(filepath.Join(baseDir, importPath))
+}
+
+// 自动添加常用的React相关子模块
+func addReactJsxRuntime(data *struct{ Imports map[string]string `json:"imports"` }) {
+    // 检查并添加 react/jsx-runtime
+    addReactSubmodule(data, "react", "jsx-runtime")
+    
+    // 检查并添加 react-dom/client
+    addReactSubmodule(data, "react-dom", "client")
+}
+
+// 添加React相关子模块的通用函数
+func addReactSubmodule(data *struct{ Imports map[string]string `json:"imports"` }, baseModule, subModule string) {
+    // 检查是否存在基础模块
+    baseUrl, baseExists := data.Imports[baseModule]
+    if !baseExists {
+        fmt.Printf("未找到%s模块，不添加%s/%s子模块\n", baseModule, baseModule, subModule)
+        return
+    }
+    
+    // 子模块完整名称
+    fullSubModuleName := baseModule + "/" + subModule
+    
+    // 检查是否已经包含子模块
+    if _, exists := data.Imports[fullSubModuleName]; !exists {
+        fmt.Printf("自动添加%s子模块\n", fullSubModuleName)
+        
+        // 从基础URL中提取版本信息
+        versionRegex := regexp.MustCompile(baseModule + `@([\d\.]+)`)
+        matches := versionRegex.FindStringSubmatch(baseUrl)
+        
+        var version string
+        if len(matches) > 1 {
+            version = matches[1]
+            fmt.Printf("检测到%s版本: %s\n", baseModule, version)
+            
+            // 根据版本构造子模块URL
+            subModuleUrl := strings.Replace(baseUrl, baseModule+"@"+version, baseModule+"@"+version+"/"+subModule, 1)
+            data.Imports[fullSubModuleName] = subModuleUrl
+            fmt.Printf("添加%s模块: %s\n", fullSubModuleName, subModuleUrl)
+        } else {
+            // 如果无法确定版本，使用与基础模块相同的URL结构
+            fmt.Printf("无法从URL确定%s版本，使用与%s相同的URL结构\n", baseModule, baseModule)
+            
+            // 构造子模块URL，替换路径部分
+            subModuleUrl := strings.Replace(baseUrl, baseModule, baseModule+"/"+subModule, 1)
+            data.Imports[fullSubModuleName] = subModuleUrl
+            fmt.Printf("添加%s模块: %s\n", fullSubModuleName, subModuleUrl)
+        }
+    }
 } 
