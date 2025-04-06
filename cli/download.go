@@ -250,13 +250,8 @@ func DownloadDependencies(args []string) error {
             
             fmt.Printf("从URL中提取的模块路径: %s\n", modulePath)
             
-            // 创建模块目录 - 确保路径中的@符号被保留
-            moduleDir := filepath.Join(esmDir, filepath.Dir(modulePath))
-            if err := os.MkdirAll(moduleDir, 0755); err != nil {
-                fmt.Printf("创建模块目录失败: %v\n", err)
-                errChan <- fmt.Errorf("创建模块目录失败: %v", err)
-                return
-            }
+            // 使用传入的输出目录和API域名
+            esmDir := filepath.Join(outDir, apiDomain)
             
             // 先下载包装器模块，从中提取实际模块路径
             // 使用索引文件名来存储主模块
@@ -265,9 +260,26 @@ func DownloadDependencies(args []string) error {
                 moduleBase = modulePath
             }
             os.MkdirAll(filepath.Join(esmDir, moduleBase), 0755)
-            wrapperPath := filepath.Join(esmDir, moduleBase, "index.js")
             
-            fmt.Printf("下载包装器模块: %s\n", url)
+            // 确定包装器模块的保存路径
+            var wrapperPath string
+            if strings.HasSuffix(modulePath, "/") || !strings.Contains(modulePath, "/") {
+                // 主模块使用 index.js
+                wrapperPath = filepath.Join(esmDir, moduleBase, "index.js")
+            } else {
+                // 子模块使用与模块路径对应的文件名
+                filename := filepath.Base(modulePath)
+                wrapperPath = filepath.Join(esmDir, moduleBase, filename + ".js")
+            }
+            
+            // 创建模块目录
+            if err := os.MkdirAll(filepath.Dir(wrapperPath), 0755); err != nil {
+                fmt.Printf("创建子模块目录失败: %v\n", err)
+                errChan <- fmt.Errorf("创建子模块目录失败: %v", err)
+                return
+            }
+            
+            fmt.Printf("下载包装器模块: %s，保存到: %s\n", url, wrapperPath)
             wrapperContent, err := fetchContent(url)
             if err != nil {
                 fmt.Printf("下载包装器模块失败: %v\n", err)
@@ -289,9 +301,8 @@ func DownloadDependencies(args []string) error {
             if len(exportMatches) == 0 {
                 fmt.Printf("未在包装器模块中找到实际模块路径\n")
                 // 仍然记为成功，因为我们已经下载了包装器模块
-                // 使用index.js作为主入口
                 if strings.Contains(spec, "/") {
-                    // 子模块情况，保留完整路径
+                    // 子模块情况，使用子模块的完整路径
                     moduleMap[spec] = "/" + modulePath + ".js"
                     globalModuleMap[spec] = "/" + modulePath + ".js"
                 } else {
@@ -353,9 +364,9 @@ func DownloadDependencies(args []string) error {
             
             // 保存映射
             if len(actualPaths) > 0 {
-                // 修改映射逻辑，使用index.js作为主入口
+                // 修改映射逻辑
                 if strings.Contains(spec, "/") {
-                    // 如果是子模块，如react-dom/client，需要保持原有的映射结构
+                    // 如果是子模块，如react-dom/client，需要保持原有的路径结构
                     moduleMap[spec] = "/" + modulePath + ".js"
                     globalModuleMap[spec] = "/" + modulePath + ".js"
                 } else {
@@ -367,22 +378,13 @@ func DownloadDependencies(args []string) error {
                 // 同时记录实际模块路径用于调试
                 moduleMapPath := moduleMap[spec]
                 fmt.Printf("已下载实际模块路径: %v，但映射保持使用包装器模块: %s\n", actualPaths, moduleMapPath)
-                
-                // // 下载常见的子模块
-                // if spec == "react" {
-                //     // 下载 react/jsx-runtime
-                //     downloadSubModule(spec, "react/jsx-runtime", apiBaseURL + "/react/jsx-runtime", outDir, semaphore, errChan)
-                // } else if spec == "react-dom" {
-                //     // 下载 react-dom/client
-                //     downloadSubModule(spec, "react-dom/client", apiBaseURL + "/react-dom/client", outDir, semaphore, errChan)
-                // }
             } else {
                 if strings.Contains(spec, "/") {
-                    moduleMap[spec] = "/" + apiBaseURL + "/" + modulePath + ".js"
-                    globalModuleMap[spec] = "/" + apiBaseURL + "/" + modulePath + ".js"
+                    moduleMap[spec] = "/" + modulePath + ".js"
+                    globalModuleMap[spec] = "/" + modulePath + ".js"
                 } else {
-                    moduleMap[spec] = "/" + apiBaseURL + "/" + modulePath + "/index.js"
-                    globalModuleMap[spec] = "/" + apiBaseURL + "/" + modulePath + "/index.js"
+                    moduleMap[spec] = "/" + modulePath + "/index.js"
+                    globalModuleMap[spec] = "/" + modulePath + "/index.js"
                 }
             }
             
@@ -839,18 +841,30 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
     
     // 使用传入的输出目录和API域名
     esmDir := filepath.Join(outDir, apiDomain)
-    wrapperPath := filepath.Join(esmDir, modulePath+".js")
+    
+    // 确保子模块文件命名正确
+    moduleDir := filepath.Dir(modulePath)
+    
+    // 确定包装器模块的保存路径
+    var wrapperPath string
+    if strings.HasSuffix(modulePath, "/") || !strings.Contains(modulePath, "/") {
+        // 主模块使用index.js
+        wrapperPath = filepath.Join(esmDir, moduleDir, "index.js")
+    } else {
+        // 子模块使用对应的文件名
+        fileName := filepath.Base(modulePath)
+        wrapperPath = filepath.Join(esmDir, moduleDir, fileName+".js")
+    }
     
     // 创建模块目录
-    moduleDir := filepath.Dir(wrapperPath)
-    if err := os.MkdirAll(moduleDir, 0755); err != nil {
+    if err := os.MkdirAll(filepath.Dir(wrapperPath), 0755); err != nil {
         fmt.Printf("创建子模块目录失败: %v\n", err)
         errChan <- fmt.Errorf("创建子模块目录失败: %v", err)
         return
     }
     
     // 下载包装器模块
-    fmt.Printf("下载子模块: %s\n", url)
+    fmt.Printf("下载子模块: %s，保存到: %s\n", url, wrapperPath)
     wrapperContent, err := fetchContent(url)
     if err != nil {
         fmt.Printf("下载子模块失败: %v\n", err)
@@ -871,11 +885,12 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
     
     if len(exportMatches) == 0 {
         fmt.Printf("未在子模块中找到实际模块路径\n")
-        globalModuleMap[subModule] = "/" + apiDomain + "/" + modulePath + ".js"
+        globalModuleMap[subModule] = "/" + modulePath + ".js"
         return
     }
     
     // 下载所有实际模块
+    var actualPaths []string
     for _, match := range exportMatches {
         if len(match) < 2 {
             continue
@@ -912,12 +927,13 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
             return
         }
         
-        // 保存映射到包装器模块而非实际模块
-        globalModuleMap[subModule] = "/" + apiDomain + "/" + modulePath + ".js"
-        fmt.Printf("子模块保存映射: %s -> /%s/%s.js (而非实际模块: %s)\n", 
-                   subModule, apiDomain, modulePath, actualPath)
-        break
+        actualPaths = append(actualPaths, actualPath)
     }
+    
+    // 保存映射到包装器模块而非实际模块
+    globalModuleMap[subModule] = "/" + modulePath + ".js"
+    fmt.Printf("已下载子模块实际路径: %v，但映射保持使用包装器模块: /%s\n", 
+               actualPaths, modulePath + ".js")
     
     fmt.Printf("子模块下载成功: %s\n", subModule)
 }
