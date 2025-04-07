@@ -1368,11 +1368,15 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
     contentStr := string(content)
 
     // 处理裸导入路径，添加API域名前缀
-    // 如 import "/react-dom@19.0.0/es2022/react-dom.mjs" 
-    // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
-    // import Q from"/axios@1.6.2/index.js";
-    // 变为 import "/esm.d8d.fun/react-dom@19.0.0/es2022/react-dom.mjs"
-    importRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import\s+[^"'\s]+\s+from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/.+?)["']`)
+    // 这个正则表达式可以匹配以下情况:
+    // 1. import "/react-dom@19.0.0/es2022/react-dom.mjs" 
+    // 2. import*as __0$ from"/react@19.0.0/es2022/react.mjs";  (无空格情况)
+    // 3. import Q from"/axios@1.6.2/index.js";  (默认导入)
+    // 4. import { useState } from "/react@19.0.0/es2022/react.mjs"; (命名导入)
+    // 5. import Ql,{useContext as tV} from"/react@19.0.0/es2022/react.mjs"; (默认+命名导入)
+    // 6. export * from "/module"
+    // 7. export { something } from "/module"
+    importRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*[^"'\s]+\s*,\s*\{[^}]*\}\s*from|import\s*\{[^}]*\}\s*from|import\s+[^"'\s]+\s+from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/.+?)["']`)
     contentStr = importRegex.ReplaceAllStringFunc(contentStr, func(match string) string {
         parts := importRegex.FindStringSubmatch(match)
         if len(parts) >= 2 {
@@ -1404,8 +1408,16 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
 // 从模块内容中找出深层依赖
 func findDeepDependencies(content []byte, currentModulePath string) []string {
     // 提取形如 "/react-dom@19.0.0/es2022/react-dom.mjs" 的依赖路径
-    // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
-    dependencyRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import\s+[^"'\s]+\s+from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["']((?:\/|\.[\.\/]).*?)["']`)
+    // 该正则表达式匹配各种格式的导入语句中的模块路径，包括:
+    // 1. import*as __0$ from"/react@19.0.0/es2022/react.mjs";  (无空格的情况)
+    // 2. import { useState } from "/react@19.0.0/es2022/react.mjs";  (命名导入)
+    // 3. import Q from"/axios@1.6.2/index.js";  (默认导入)
+    // 4. import Ql,{useContext as tV} from"/react@19.0.0/es2022/react.mjs";  (默认+命名导入)
+    // 5. import "/module.js"  (简单导入)
+    // 6. export * from "/module"
+    // 7. export { something } from "/module"
+    // 支持绝对路径(/开头)和相对路径(./ 或 ../ 开头)
+    dependencyRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*[^"'\s]+\s*,\s*\{[^}]*\}\s*from|import\s*\{[^}]*\}\s*from|import\s+[^"'\s]+\s+from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["']((?:\/|\.[\.\/]).*?)["']`)
     matches := dependencyRegex.FindAllSubmatch(content, -1)
     
     var deps []string
