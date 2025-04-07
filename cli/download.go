@@ -28,6 +28,7 @@ const (
     LogCatDependency = "deps"     // 依赖处理日志
     LogCatCompile   = "compile"   // 编译相关日志
     LogCatFS        = "fs"        // 文件系统操作日志
+    LogCatContent   = "content"   // 模块内容日志
 )
 
 // 全局logger实例
@@ -54,6 +55,7 @@ func initLogger(level string, enabledCategories []string) {
         categories[LogCatDependency] = true
         categories[LogCatCompile] = true
         categories[LogCatFS] = true
+        categories[LogCatContent] = true
     } else {
         // 只启用指定的类别
         for _, cat := range enabledCategories {
@@ -164,7 +166,7 @@ func DownloadDependencies(args []string) error {
     basePath = ""
     
     // 日志类别
-    logCategories := []string{LogCatGeneral, LogCatNetwork, LogCatDependency, LogCatCompile, LogCatFS}
+    logCategories := []string{LogCatGeneral, LogCatNetwork, LogCatDependency, LogCatCompile, LogCatFS, LogCatContent}
     
     logger.Info(LogCatGeneral, "入口路径: %s", entryPath)
     
@@ -913,22 +915,24 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     }
     
     // 处理模块内容中的路径
-    logger.Debug(LogCatDependency, "处理模块内容中的依赖路径: %s", url)
     processedContent := processWrapperContent(moduleContent, apiDomain)
     
+    // 定义头N字节变量
+    headN := 200
     // 仅在处理前后内容一样时才显示日志
     if string(moduleContent) == string(processedContent) {
-        logger.Debug(LogCatDependency, "检测到内容未发生变化")
+        logger.Debug(LogCatContent, "处理模块内容中的依赖路径: %s", url)
+        logger.Debug(LogCatContent, "检测到内容未发生变化")
         // 显示处理前的内容头100字节（仅调试级别）
-        if len(moduleContent) > 100 {
-            logger.Debug(LogCatDependency, "处理前的内容头100字节: %s", string(moduleContent[:100]))
+        if len(moduleContent) > headN {
+            logger.Debug(LogCatContent, "处理前的内容头 %d 字节: %s", headN, string(moduleContent[:headN]))
         } else {
-            logger.Debug(LogCatDependency, "处理前的内容: %s", string(moduleContent))
+            logger.Debug(LogCatContent, "处理前的内容: %s", string(moduleContent))
         }
+        logger.Debug(LogCatContent, "处理模块内容中的依赖路径完成: %s", url)
     } else {
-        logger.Debug(LogCatDependency, "内容已发生变化")
+        // logger.Debug(LogCatContent, "内容已发生变化")
     }
-    logger.Debug(LogCatDependency, "处理模块内容中的依赖路径完成: %s", url)
     
     // 保存处理后的模块
     if err := os.WriteFile(moduleSavePath, processedContent, 0644); err != nil {
@@ -1386,6 +1390,7 @@ func PrintLogHelp() {
     fmt.Printf("  %s: 依赖分析和处理日志\n", LogCatDependency)
     fmt.Printf("  %s: 编译相关日志\n", LogCatCompile)
     fmt.Printf("  %s: 文件系统操作日志\n", LogCatFS)
+    fmt.Printf("  %s: 模块内容显示日志\n", LogCatContent)
     fmt.Println()
     fmt.Println("示例:")
     fmt.Println("  esm download ./project --log-level=debug --log-categories=general,network")
