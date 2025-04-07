@@ -22,6 +22,8 @@ type DependencyInfo struct {
 var globalModuleMap map[string]string
 // 跟踪已经下载过的模块，避免重复下载
 var downloadedModules map[string]bool
+// 保护downloadedModules的互斥锁
+var downloadedModulesMutex sync.Mutex
 // 是否压缩代码
 var minify bool
 // API 基础 URL
@@ -292,8 +294,18 @@ func DownloadDependencies(args []string) error {
                 return
             }
             
-            // 标记该URL已经处理过，避免重复下载
-            downloadedModules[url] = true
+            // 检查是否已下载过此模块，避免重复下载
+            downloadedModulesMutex.Lock()
+            alreadyDownloaded := downloadedModules[url]
+            downloadedModulesMutex.Unlock()
+            if alreadyDownloaded {
+                fmt.Printf("模块已下载过，跳过: %s\n", url)
+                // 标记该URL已经处理过
+                downloadedModulesMutex.Lock()
+                downloadedModules[url] = true
+                downloadedModulesMutex.Unlock()
+                return
+            }
             
             fmt.Printf("下载包装器模块: %s，保存到: %s\n", url, wrapperPath)
             wrapperContent, err := fetchContent(url)
@@ -360,14 +372,19 @@ func DownloadDependencies(args []string) error {
                 localPath := filepath.Join(esmDir, actualPath)
                 
                 // 检查是否已下载过此模块，避免重复下载
-                if downloadedModules[actualUrl] {
+                downloadedModulesMutex.Lock()
+                alreadyDownloaded := downloadedModules[actualUrl]
+                downloadedModulesMutex.Unlock()
+                if alreadyDownloaded {
                     fmt.Printf("模块已下载过，跳过: %s\n", actualUrl)
                     actualPaths = append(actualPaths, actualPath)
                     continue
                 }
                 
                 // 标记该URL已经处理过
+                downloadedModulesMutex.Lock()
                 downloadedModules[actualUrl] = true
+                downloadedModulesMutex.Unlock()
                 
                 fmt.Printf("下载实际模块: %s\n", actualUrl)
                 actualContent, err := fetchContent(actualUrl)
@@ -403,12 +420,19 @@ func DownloadDependencies(args []string) error {
                     fmt.Printf("✅ 共发现 %d 个深层依赖\n", len(depPaths))
                 } else {
                     fmt.Printf("⚠️ 未发现任何深层依赖\n")
-                    // 取actualContent中头200字节
-                    fmt.Printf("实际模块内容: %s\n", string(actualContent[:200]))
+                    // 取actualContent中头200字节，添加边界检查
+                    contentPreview := string(actualContent)
+                    if len(contentPreview) > 200 {
+                        contentPreview = contentPreview[:200]
+                    }
+                    fmt.Printf("实际模块内容: %s\n", contentPreview)
                 }
                 for _, depPath := range depPaths {
                     depUrl := apiBaseURL + depPath
-                    if !downloadedModules[depUrl] {
+                    downloadedModulesMutex.Lock()
+                    alreadyDownloaded := downloadedModules[depUrl]
+                    downloadedModulesMutex.Unlock()
+                    if !alreadyDownloaded {
                         // 添加日志：开始递归下载
                         fmt.Printf("🚀 开始递归下载依赖: %s\n", depUrl)
                         
@@ -429,6 +453,15 @@ func DownloadDependencies(args []string) error {
             // 现在处理包装器模块内容中的路径 (在处理所有实际模块后)
             apiDomain := getAPIDomain()
             wrapperContent = processWrapperContent(wrapperContent, apiDomain)
+            
+            fmt.Printf("包装器模块路径: %s\n", wrapperPath)
+            
+            // 显示包装器模块内容前200个字符（添加边界检查）
+            contentPreview := string(wrapperContent)
+            if len(contentPreview) > 200 {
+                contentPreview = contentPreview[:200]
+            }
+            fmt.Printf("包装器模块内容: %s\n", contentPreview)
             
             // 保存包装器模块
             if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
@@ -904,11 +937,16 @@ func compileFile(content string, filename string) (string, error) {
 func downloadSubModule(parentModule, subModule, url, outDir string, semaphore chan struct{}, errChan chan error) {
     // 检查是否已下载过此模块
     moduleKey := url
-    if downloadedModules[moduleKey] {
+    downloadedModulesMutex.Lock()
+    alreadyDownloaded := downloadedModules[moduleKey]
+    downloadedModulesMutex.Unlock()
+    if alreadyDownloaded {
         fmt.Printf("模块已下载过，跳过: %s\n", url)
         return
     }
+    downloadedModulesMutex.Lock()
     downloadedModules[moduleKey] = true
+    downloadedModulesMutex.Unlock()
     
     fmt.Printf("准备下载子模块: %s\n", subModule)
     
@@ -995,7 +1033,10 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
             if !isLocalPath(dep) && !strings.HasPrefix(dep, "/") {
                 // 构建子依赖的URL
                 depURL := constructDependencyURL(dep, apiBaseURL)
-                if depURL != "" && !downloadedModules[depURL] {
+                downloadedModulesMutex.Lock()
+                alreadyDownloaded := downloadedModules[depURL]
+                downloadedModulesMutex.Unlock()
+                if depURL != "" && !alreadyDownloaded {
                     // 递归下载子依赖
                     fmt.Printf("📦 递归下载裸依赖: %s -> %s\n", dep, depURL)
                     go downloadSubModule("", dep, depURL, outDir, semaphore, errChan)
@@ -1064,7 +1105,10 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
             if !isLocalPath(dep) && !strings.HasPrefix(dep, "/") {
                 // 构建子依赖的URL
                 depURL := constructDependencyURL(dep, apiBaseURL)
-                if depURL != "" && !downloadedModules[depURL] {
+                downloadedModulesMutex.Lock()
+                alreadyDownloaded := downloadedModules[depURL]
+                downloadedModulesMutex.Unlock()
+                if depURL != "" && !alreadyDownloaded {
                     // 递归下载子依赖
                     fmt.Printf("📦 递归下载裸依赖: %s -> %s\n", dep, depURL)
                     go downloadSubModule("", dep, depURL, outDir, semaphore, errChan)
@@ -1079,7 +1123,10 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         depPaths := findDeepDependencies(actualContent)
         for _, depPath := range depPaths {
             depUrl := apiBaseURL + depPath
-            if !downloadedModules[depUrl] {
+            downloadedModulesMutex.Lock()
+            alreadyDownloaded := downloadedModules[depUrl]
+            downloadedModulesMutex.Unlock()
+            if !alreadyDownloaded {
                 fmt.Printf("🔍 递归下载深层依赖: %s\n", depUrl)
                 go downloadSubModule("", depPath, depUrl, outDir, semaphore, errChan)
             } else {
