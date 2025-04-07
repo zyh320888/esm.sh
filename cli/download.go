@@ -774,7 +774,7 @@ func compileFile(content string, filename string) (string, error) {
         return "", fmt.Errorf("解析响应失败: %v", err)
     }
     
-    logger.Debug(LogCatCompile, "编译成功，处理编译后代码")
+    logger.Debug(LogCatCompile, "编译成功，处理编译后代码", apiDomain)
     
     // 进一步处理编译后的代码，将引用替换为本地路径
     compiledCode := result.Code
@@ -1017,40 +1017,17 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     
     // 设置模块映射（如果提供了spec）
     if spec != "" {
-        // 检查modulePath是否有扩展名
-        ext := filepath.Ext(modulePath)
-        // 如果是子模块使用完整路径
-        if strings.Contains(spec, "/") {
-            if ext == "" || (ext != ".js" && ext != ".mjs" && ext != ".cjs") {
-                // 没有扩展名，添加.js
-                if localModuleMap != nil {
-                    localModuleMap[spec] = "/" + modulePath + ".js"
-                }
-                globalModuleMap[spec] = "/" + modulePath + ".js"
-            } else {
-                // 已有扩展名，不添加.js
-                if localModuleMap != nil {
-                    localModuleMap[spec] = "/" + modulePath
-                }
-                globalModuleMap[spec] = "/" + modulePath
-            }
-        } else {
-            // 主模块使用index.js
-            if localModuleMap != nil {
-                localModuleMap[spec] = "/" + modulePath + "/index.js"
-            }
-            globalModuleMap[spec] = "/" + modulePath + "/index.js"
+        // 使用normalizeModulePath为模块路径添加适当的扩展名或index.js
+        normalizedModulePath := normalizeModulePath("/" + modulePath)
+        
+        if localModuleMap != nil {
+            localModuleMap[spec] = normalizedModulePath
         }
+        globalModuleMap[spec] = normalizedModulePath
     } else if modulePath != "" {
         // 对于子模块，也添加到全局映射中
-        ext := filepath.Ext(modulePath)
-        if ext == "" || (ext != ".js" && ext != ".mjs" && ext != ".cjs") {
-            // 没有扩展名，添加.js
-            globalModuleMap[modulePath] = "/" + modulePath + ".js"
-        } else {
-            // 已有扩展名，不添加.js
-            globalModuleMap[modulePath] = "/" + modulePath
-        }
+        normalizedModulePath := normalizeModulePath("/" + modulePath)
+        globalModuleMap[modulePath] = normalizedModulePath
     }
     
     // 下载所有依赖
