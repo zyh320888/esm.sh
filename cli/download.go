@@ -237,274 +237,7 @@ func DownloadDependencies(args []string) error {
     for spec, url := range importMapData.Imports {
         fmt.Printf("准备下载依赖: %s -> %s\n", spec, url)
         wg.Add(1)
-        go func(spec, url string) {
-            defer wg.Done()
-            semaphore <- struct{}{}
-            defer func() { <-semaphore }()
-
-            fmt.Printf("开始下载: %s\n", spec)
-            
-            // 解析URL中的模块路径
-            moduleRegex := regexp.MustCompile(`https://.*?/(.+)`)
-            matches := moduleRegex.FindStringSubmatch(url)
-            
-            var modulePath string
-            if len(matches) > 1 {
-                modulePath = matches[1]
-                // 处理URL中的查询参数
-                if strings.Contains(modulePath, "?") {
-                    modulePath = strings.Split(modulePath, "?")[0]
-                }
-            } else {
-                modulePath = spec
-                // 处理spec中可能的查询参数
-                if strings.Contains(modulePath, "?") {
-                    modulePath = strings.Split(modulePath, "?")[0]
-                }
-            }
-            
-            fmt.Printf("从URL中提取的模块路径: %s\n", modulePath)
-            
-            // 使用传入的输出目录和API域名
-            esmDir := filepath.Join(outDir, apiDomain)
-            
-            // 先下载包装器模块，从中提取实际模块路径
-            // 使用索引文件名来存储主模块
-            moduleBase := filepath.Dir(modulePath)
-            if moduleBase == "." {
-                moduleBase = modulePath
-            }
-            os.MkdirAll(filepath.Join(esmDir, moduleBase), 0755)
-            
-            // 确定包装器模块的保存路径
-            var wrapperPath string
-            if strings.HasSuffix(modulePath, "/") || !strings.Contains(modulePath, "/") {
-                // 主模块使用 index.js
-                wrapperPath = filepath.Join(esmDir, moduleBase, "index.js")
-            } else {
-                // 子模块使用与模块路径对应的文件名
-                filename := filepath.Base(modulePath)
-                wrapperPath = filepath.Join(esmDir, moduleBase, filename + ".js")
-            }
-            
-            // 创建模块目录
-            if err := os.MkdirAll(filepath.Dir(wrapperPath), 0755); err != nil {
-                fmt.Printf("创建子模块目录失败: %v\n", err)
-                errChan <- fmt.Errorf("创建子模块目录失败: %v", err)
-                return
-            }
-            
-            // 检查是否已下载过此模块，避免重复下载
-            downloadedModulesMutex.Lock()
-            alreadyDownloaded := downloadedModules[url]
-            downloadedModulesMutex.Unlock()
-            if alreadyDownloaded {
-                fmt.Printf("模块已下载过，跳过: %s\n", url)
-                // 标记该URL已经处理过
-                downloadedModulesMutex.Lock()
-                downloadedModules[url] = true
-                downloadedModulesMutex.Unlock()
-                return
-            }
-            
-            fmt.Printf("下载包装器模块: %s，保存到: %s\n", url, wrapperPath)
-            wrapperContent, err := fetchContent(url)
-            if err != nil {
-                fmt.Printf("下载包装器模块失败: %v\n", err)
-                errChan <- fmt.Errorf("下载包装器模块失败: %v", err)
-                return
-            }
-            
-            // 从包装器模块中提取实际模块路径 (在处理内容之前)
-            exportRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[^"']+?)["']`)
-            exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
-            
-            if len(exportMatches) == 0 {
-                fmt.Printf("未在包装器模块中找到实际模块路径\n")
-                // 先处理包装器模块内容中的路径
-                apiDomain := getAPIDomain()
-                wrapperContent = processWrapperContent(wrapperContent, apiDomain)
-                
-                // 保存包装器模块
-                if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
-                    fmt.Printf("保存包装器模块失败: %v\n", err)
-                    errChan <- fmt.Errorf("保存包装器模块失败: %v", err)
-                    return
-                }
-                
-                // 仍然记为成功，因为我们已经下载了包装器模块
-                if strings.Contains(spec, "/") {
-                    // 子模块情况，使用子模块的完整路径
-                    moduleMap[spec] = "/" + modulePath + ".js"
-                    globalModuleMap[spec] = "/" + modulePath + ".js"
-                } else {
-                    // 主模块情况，使用index.js
-                    moduleMap[spec] = "/" + modulePath + "/index.js"
-                    globalModuleMap[spec] = "/" + modulePath + "/index.js"
-                }
-                fmt.Printf("下载成功: %s -> %s\n", spec, wrapperPath)
-                return
-            }
-            
-            // 下载所有实际模块
-            var actualPaths []string
-            for _, match := range exportMatches {
-                if len(match) < 2 {
-                    continue
-                }
-                
-                actualPath := string(match[1])
-                if !strings.HasPrefix(actualPath, "/") {
-                    actualPath = "/" + actualPath
-                }
-                
-                // 保存原始路径（带查询参数）用于URL请求
-                originalPath := actualPath
-                
-                // 去除路径中的查询参数，用于文件系统路径
-                if strings.Contains(actualPath, "?") {
-                    actualPath = strings.Split(actualPath, "?")[0]
-                }
-                
-                // 使用带查询参数的URL进行请求
-                actualUrl := apiBaseURL + originalPath
-                // 使用不带查询参数的路径作为本地路径
-                localPath := filepath.Join(esmDir, actualPath)
-                
-                // 检查是否已下载过此模块，避免重复下载
-                downloadedModulesMutex.Lock()
-                alreadyDownloaded := downloadedModules[actualUrl]
-                downloadedModulesMutex.Unlock()
-                if alreadyDownloaded {
-                    fmt.Printf("模块已下载过，跳过: %s\n", actualUrl)
-                    actualPaths = append(actualPaths, actualPath)
-                    continue
-                }
-                
-                // 标记该URL已经处理过
-                downloadedModulesMutex.Lock()
-                downloadedModules[actualUrl] = true
-                downloadedModulesMutex.Unlock()
-                
-                fmt.Printf("下载实际模块: %s\n", actualUrl)
-                actualContent, err := fetchContent(actualUrl)
-                if err != nil {
-                    fmt.Printf("下载实际模块失败: %v\n", err)
-                    errChan <- fmt.Errorf("下载实际模块失败: %v", err)
-                    return
-                }
-                
-                // 创建实际模块目录
-                actualDir := filepath.Dir(localPath)
-                if err := os.MkdirAll(actualDir, 0755); err != nil {
-                    fmt.Printf("创建实际模块目录失败: %v\n", err)
-                    errChan <- fmt.Errorf("创建实际模块目录失败: %v", err)
-                    return
-                }
-                
-                // 保存实际模块
-                if err := os.WriteFile(localPath, actualContent, 0644); err != nil {
-                    fmt.Printf("保存实际模块失败: %v\n", err)
-                    errChan <- fmt.Errorf("保存实际模块失败: %v", err)
-                    return
-                }
-                
-                actualPaths = append(actualPaths, actualPath)
-                
-                // 在这里立即对下载的实际模块进行递归分析
-                // 提取模块中的深层依赖
-                depPaths := findDeepDependencies(actualContent)
-                // 添加日志：总结发现的依赖数量
-                fmt.Printf("分析实际模块中的深层依赖: %s\n", actualPath)
-                if len(depPaths) > 0 {
-                    fmt.Printf("✅ 共发现 %d 个深层依赖\n", len(depPaths))
-                } else {
-                    fmt.Printf("⚠️ 未发现任何深层依赖\n")
-                    // 取actualContent中头200字节，添加边界检查
-                    contentPreview := string(actualContent)
-                    if len(contentPreview) > 200 {
-                        contentPreview = contentPreview[:200]
-                    }
-                    fmt.Printf("实际模块内容: %s\n", contentPreview)
-                }
-                for _, depPath := range depPaths {
-                    depUrl := apiBaseURL + depPath
-                    downloadedModulesMutex.Lock()
-                    alreadyDownloaded := downloadedModules[depUrl]
-                    downloadedModulesMutex.Unlock()
-                    if !alreadyDownloaded {
-                        // 添加日志：开始递归下载
-                        fmt.Printf("🚀 开始递归下载依赖: %s\n", depUrl)
-                        
-                        // 使用新的goroutine递归处理依赖
-                        wg.Add(1)
-                        go func(depPath, depUrl string) {
-                            defer wg.Done()
-                            downloadSubModule("", depPath, depUrl, outDir, semaphore, errChan)
-                        }(depPath, depUrl)
-                    } else {
-                        // 添加日志：跳过已下载的依赖
-                        fmt.Printf("⏩ 跳过已下载的依赖: %s\n", depUrl)
-                    }
-                }
-                
-            }
-            
-            // 现在处理包装器模块内容中的路径 (在处理所有实际模块后)
-            apiDomain := getAPIDomain()
-            wrapperContent = processWrapperContent(wrapperContent, apiDomain)
-            
-            fmt.Printf("包装器模块路径: %s\n", wrapperPath)
-            
-            // 显示包装器模块内容前200个字符（添加边界检查）
-            contentPreview := string(wrapperContent)
-            if len(contentPreview) > 200 {
-                contentPreview = contentPreview[:200]
-            }
-            fmt.Printf("包装器模块内容: %s\n", contentPreview)
-            
-            // 保存包装器模块
-            if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
-                fmt.Printf("保存包装器模块失败: %v\n", err)
-                errChan <- fmt.Errorf("保存包装器模块失败: %v", err)
-                return
-            }
-            
-            // 子模块不存在实际模块路径的处理
-            if len(exportMatches) == 0 {
-                fmt.Printf("未在子模块中找到实际模块路径\n")
-                globalModuleMap[spec] = "/" + apiBaseURL + "/" + modulePath + ".js"
-                return
-            }
-            
-            // 保存映射
-            if len(actualPaths) > 0 {
-                // 修改映射逻辑
-                if strings.Contains(spec, "/") {
-                    // 如果是子模块，如react-dom/client，需要保持原有的路径结构
-                    moduleMap[spec] = "/" + modulePath + ".js"
-                    globalModuleMap[spec] = "/" + modulePath + ".js"
-                } else {
-                    // 如果是主模块，使用index.js
-                    moduleMap[spec] = "/" + modulePath + "/index.js"
-                    globalModuleMap[spec] = "/" + modulePath + "/index.js"
-                }
-                
-                // 同时记录实际模块路径用于调试
-                moduleMapPath := moduleMap[spec]
-                fmt.Printf("已下载实际模块路径: %v，但映射保持使用包装器模块: %s\n", actualPaths, moduleMapPath)
-            } else {
-                if strings.Contains(spec, "/") {
-                    moduleMap[spec] = "/" + modulePath + ".js"
-                    globalModuleMap[spec] = "/" + modulePath + ".js"
-                } else {
-                    moduleMap[spec] = "/" + modulePath + "/index.js"
-                    globalModuleMap[spec] = "/" + modulePath + "/index.js"
-                }
-            }
-            
-            fmt.Printf("下载成功: %s -> 包装器模块和 %d 个实际模块\n", spec, len(actualPaths))
-        }(spec, url)
+        go downloadAndProcessModule(spec, url, outDir, &wg, semaphore, errChan, moduleMap)
     }
 
     // 等待所有下载完成
@@ -933,124 +666,135 @@ func compileFile(content string, filename string) (string, error) {
     return compiledCode, nil
 }
 
-// 下载子模块
-func downloadSubModule(parentModule, subModule, url, outDir string, semaphore chan struct{}, errChan chan error) {
+// 下载并处理模块的通用函数
+func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, semaphore chan struct{}, errChan chan error, localModuleMap map[string]string) {
+    // 如果提供了waitgroup，在完成时通知
+    if wg != nil {
+        defer wg.Done()
+    }
+    
+    // 如果提供了信号量，获取许可
+    if semaphore != nil {
+        semaphore <- struct{}{}
+        defer func() { <-semaphore }()
+    }
+
+    fmt.Printf("开始处理模块: %s\n", url)
+    
     // 检查是否已下载过此模块
-    moduleKey := url
     downloadedModulesMutex.Lock()
-    alreadyDownloaded := downloadedModules[moduleKey]
+    alreadyDownloaded := downloadedModules[url]
     downloadedModulesMutex.Unlock()
     if alreadyDownloaded {
         fmt.Printf("模块已下载过，跳过: %s\n", url)
         return
     }
+    
+    // 标记该URL已经处理过
     downloadedModulesMutex.Lock()
-    downloadedModules[moduleKey] = true
+    downloadedModules[url] = true
     downloadedModulesMutex.Unlock()
     
-    fmt.Printf("准备下载子模块: %s\n", subModule)
-    
-    semaphore <- struct{}{}
-    defer func() { <-semaphore }()
-    
     // 解析URL中的模块路径
-    moduleRegex := regexp.MustCompile(`https://esm\.(sh|d8d\.fun)/(.+)`)
+    moduleRegex := regexp.MustCompile(`https://.*?/(.+)`)
     matches := moduleRegex.FindStringSubmatch(url)
     
     var modulePath string
-    if len(matches) > 2 {
-        modulePath = matches[2]
+    if len(matches) > 1 {
+        modulePath = matches[1]
         // 处理URL中的查询参数
         if strings.Contains(modulePath, "?") {
             modulePath = strings.Split(modulePath, "?")[0]
         }
     } else {
-        modulePath = subModule
-        // 处理subModule中可能的查询参数
+        modulePath = spec
+        // 处理spec中可能的查询参数
         if strings.Contains(modulePath, "?") {
             modulePath = strings.Split(modulePath, "?")[0]
         }
     }
     
+    fmt.Printf("从URL中提取的模块路径: %s\n", modulePath)
+    
     // 提取域名部分，用于后续处理
-    apiDomain := strings.TrimPrefix(strings.TrimPrefix(apiBaseURL, "https://"), "http://")
+    apiDomain := getAPIDomain()
     
     // 使用传入的输出目录和API域名
     esmDir := filepath.Join(outDir, apiDomain)
     
-    // 确保子模块文件命名正确
-    moduleDir := filepath.Dir(modulePath)
+    // 确定模块的保存路径
+    moduleBase := filepath.Dir(modulePath)
+    if moduleBase == "." {
+        moduleBase = modulePath
+    }
     
-    // 确定包装器模块的保存路径
-    var wrapperPath string
+    var moduleSavePath string
     if strings.HasSuffix(modulePath, "/") || !strings.Contains(modulePath, "/") {
         // 主模块使用index.js
-        wrapperPath = filepath.Join(esmDir, moduleDir, "index.js")
+        moduleSavePath = filepath.Join(esmDir, moduleBase, "index.js")
     } else {
-        // 子模块使用对应的文件名
-        fileName := filepath.Base(modulePath)
-        wrapperPath = filepath.Join(esmDir, moduleDir, fileName+".js")
+        // 子模块使用对应文件名
+        filename := filepath.Base(modulePath)
+        moduleSavePath = filepath.Join(esmDir, moduleBase, filename + ".js")
     }
     
     // 创建模块目录
-    if err := os.MkdirAll(filepath.Dir(wrapperPath), 0755); err != nil {
-        fmt.Printf("创建子模块目录失败: %v\n", err)
-        errChan <- fmt.Errorf("创建子模块目录失败: %v", err)
+    if err := os.MkdirAll(filepath.Dir(moduleSavePath), 0755); err != nil {
+        fmt.Printf("创建模块目录失败: %v\n", err)
+        if errChan != nil {
+            errChan <- fmt.Errorf("创建模块目录失败: %v", err)
+        }
         return
     }
     
-    // 下载包装器模块
-    fmt.Printf("下载子模块: %s，保存到: %s\n", url, wrapperPath)
-    wrapperContent, err := fetchContent(url)
+    // 下载模块内容
+    fmt.Printf("下载模块: %s，保存到: %s\n", url, moduleSavePath)
+    moduleContent, err := fetchContent(url)
     if err != nil {
-        fmt.Printf("下载子模块失败: %v\n", err)
-        errChan <- fmt.Errorf("下载子模块失败: %v", err)
+        fmt.Printf("下载模块失败: %v\n", err)
+        if errChan != nil {
+            errChan <- fmt.Errorf("下载模块失败: %v", err)
+        }
         return
     }
     
-    // 从包装器模块中提取实际模块路径（先提取再处理内容）
+    // 从模块中提取实际模块路径
     exportRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[^"']+?)["']`)
-    exportMatches := exportRegex.FindAllSubmatch(wrapperContent, -1)
+    exportMatches := exportRegex.FindAllSubmatch(moduleContent, -1)
     
-    if len(exportMatches) == 0 {
-        fmt.Printf("未在子模块中找到实际模块路径\n")
-        
-        // 处理包装器模块内容中的路径
-        wrapperContent = processWrapperContent(wrapperContent, apiDomain)
-        
-        // 保存包装器模块
-        if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
-            fmt.Printf("保存子模块失败: %v\n", err)
-            errChan <- fmt.Errorf("保存子模块失败: %v", err)
-            return
+    // 处理模块内容中的路径
+    moduleContent = processWrapperContent(moduleContent, apiDomain)
+    
+    // 保存处理后的模块
+    if err := os.WriteFile(moduleSavePath, moduleContent, 0644); err != nil {
+        fmt.Printf("保存模块失败: %v\n", err)
+        if errChan != nil {
+            errChan <- fmt.Errorf("保存模块失败: %v", err)
         }
-        
-        globalModuleMap[subModule] = "/" + modulePath + ".js"
-        
-        // 分析包装器模块中的依赖
-        bareImports := findBareImports(wrapperContent)
-        for _, dep := range bareImports {
-            if !isLocalPath(dep) && !strings.HasPrefix(dep, "/") {
-                // 构建子依赖的URL
-                depURL := constructDependencyURL(dep, apiBaseURL)
-                downloadedModulesMutex.Lock()
-                alreadyDownloaded := downloadedModules[depURL]
-                downloadedModulesMutex.Unlock()
-                if depURL != "" && !alreadyDownloaded {
-                    // 递归下载子依赖
-                    fmt.Printf("📦 递归下载裸依赖: %s -> %s\n", dep, depURL)
-                    go downloadSubModule("", dep, depURL, outDir, semaphore, errChan)
-                } else if depURL != "" {
-                    fmt.Printf("⏩ 跳过已下载的裸依赖: %s\n", depURL)
-                }
-            }
-        }
-        
         return
     }
     
-    // 下载所有实际模块
-    var actualPaths []string
+    // 设置模块映射（如果提供了spec）
+    if spec != "" {
+        if strings.Contains(spec, "/") {
+            // 子模块使用完整路径
+            if localModuleMap != nil {
+                localModuleMap[spec] = "/" + modulePath + ".js"
+            }
+            globalModuleMap[spec] = "/" + modulePath + ".js"
+        } else {
+            // 主模块使用index.js
+            if localModuleMap != nil {
+                localModuleMap[spec] = "/" + modulePath + "/index.js"
+            }
+            globalModuleMap[spec] = "/" + modulePath + "/index.js"
+        }
+    } else if modulePath != "" {
+        // 对于子模块，也添加到全局映射中
+        globalModuleMap[modulePath] = "/" + modulePath + ".js"
+    }
+    
+    // 下载所有实际模块路径
     for _, match := range exportMatches {
         if len(match) < 2 {
             continue
@@ -1071,86 +815,59 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         
         // 使用带查询参数的URL进行请求
         actualUrl := apiBaseURL + originalPath
-        // 使用不带查询参数的路径作为本地路径
-        localPath := filepath.Join(esmDir, actualPath)
         
-        fmt.Printf("下载子模块实际文件: %s\n", actualUrl)
-        actualContent, err := fetchContent(actualUrl)
-        if err != nil {
-            fmt.Printf("下载子模块实际文件失败: %v\n", err)
-            errChan <- fmt.Errorf("下载子模块实际文件失败: %v", err)
-            return
+        // 递归下载实际模块
+        if wg != nil {
+            wg.Add(1)
         }
-        
-        // 创建实际模块目录
-        actualDir := filepath.Dir(localPath)
-        if err := os.MkdirAll(actualDir, 0755); err != nil {
-            fmt.Printf("创建子模块实际文件目录失败: %v\n", err)
-            errChan <- fmt.Errorf("创建子模块实际文件目录失败: %v", err)
-            return
-        }
-        
-        // 保存实际模块
-        if err := os.WriteFile(localPath, actualContent, 0644); err != nil {
-            fmt.Printf("保存子模块实际文件失败: %v\n", err)
-            errChan <- fmt.Errorf("保存子模块实际文件失败: %v", err)
-            return
-        }
-        
-        actualPaths = append(actualPaths, actualPath)
-        
-        // 分析实际模块中的裸依赖
-        bareImports := findBareImports(actualContent)
-        for _, dep := range bareImports {
-            if !isLocalPath(dep) && !strings.HasPrefix(dep, "/") {
-                // 构建子依赖的URL
-                depURL := constructDependencyURL(dep, apiBaseURL)
-                downloadedModulesMutex.Lock()
-                alreadyDownloaded := downloadedModules[depURL]
-                downloadedModulesMutex.Unlock()
-                if depURL != "" && !alreadyDownloaded {
-                    // 递归下载子依赖
-                    fmt.Printf("📦 递归下载裸依赖: %s -> %s\n", dep, depURL)
-                    go downloadSubModule("", dep, depURL, outDir, semaphore, errChan)
-                } else if depURL != "" {
-                    fmt.Printf("⏩ 跳过已下载的裸依赖: %s\n", depURL)
-                }
+        go downloadAndProcessModule("", actualUrl, outDir, wg, semaphore, errChan, localModuleMap)
+    }
+    
+    // 查找模块中的深层依赖
+    depPaths := findDeepDependencies(moduleContent)
+    for _, depPath := range depPaths {
+        depUrl := apiBaseURL + depPath
+        downloadedModulesMutex.Lock()
+        alreadyDownloaded := downloadedModules[depUrl]
+        downloadedModulesMutex.Unlock()
+        if !alreadyDownloaded {
+            fmt.Printf("🚀 开始递归下载深层依赖: %s\n", depUrl)
+            if wg != nil {
+                wg.Add(1)
             }
+            go downloadAndProcessModule("", depUrl, outDir, wg, semaphore, errChan, localModuleMap)
+        } else {
+            fmt.Printf("⏩ 跳过已下载的深层依赖: %s\n", depUrl)
         }
-        
-        // 分析实际模块中的深层依赖（直接路径引用）
-        fmt.Printf("分析实际模块中的深层依赖: %s\n", actualPath)
-        depPaths := findDeepDependencies(actualContent)
-        for _, depPath := range depPaths {
-            depUrl := apiBaseURL + depPath
+    }
+    
+    // 查找裸导入
+    bareImports := findBareImports(moduleContent)
+    for _, imp := range bareImports {
+        if !isLocalPath(imp) && !strings.HasPrefix(imp, "/") {
+            depURL := constructDependencyURL(imp, apiBaseURL)
             downloadedModulesMutex.Lock()
-            alreadyDownloaded := downloadedModules[depUrl]
+            alreadyDownloaded := downloadedModules[depURL]
             downloadedModulesMutex.Unlock()
-            if !alreadyDownloaded {
-                fmt.Printf("🔍 递归下载深层依赖: %s\n", depUrl)
-                go downloadSubModule("", depPath, depUrl, outDir, semaphore, errChan)
-            } else {
-                fmt.Printf("⏩ 跳过已下载的深层依赖: %s\n", depUrl)
+            if depURL != "" && !alreadyDownloaded {
+                fmt.Printf("📦 递归下载裸依赖: %s -> %s\n", imp, depURL)
+                if wg != nil {
+                    wg.Add(1)
+                }
+                go downloadAndProcessModule("", depURL, outDir, wg, semaphore, errChan, localModuleMap)
+            } else if depURL != "" {
+                fmt.Printf("⏩ 跳过已下载的裸依赖: %s\n", depURL)
             }
         }
     }
     
-    // 处理包装器模块内容中的路径（在提取和下载实际模块后）
-    wrapperContent = processWrapperContent(wrapperContent, apiDomain)
-    
-    // 保存包装器模块
-    if err := os.WriteFile(wrapperPath, wrapperContent, 0644); err != nil {
-        fmt.Printf("保存子模块失败: %v\n", err)
-        errChan <- fmt.Errorf("保存子模块失败: %v", err)
-        return
-    }
-    
-    // 保存映射到包装器模块而非实际模块
-    globalModuleMap[subModule] = "/" + modulePath + ".js"
-    fmt.Printf("已下载子模块实际路径: %v，但映射保持使用包装器模块: /%s\n", 
-               actualPaths, modulePath + ".js")
-    
-    fmt.Printf("子模块下载成功: %s\n", subModule)
+    fmt.Printf("模块处理完成: %s\n", url)
+}
+
+// 重写downloadSubModule函数，直接调用通用函数
+func downloadSubModule(parentModule, subModule, url, outDir string, semaphore chan struct{}, errChan chan error) {
+    // 直接调用通用函数处理模块
+    downloadAndProcessModule(subModule, url, outDir, nil, semaphore, errChan, nil)
 }
 
 // 判断是否为本地路径
