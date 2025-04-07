@@ -126,6 +126,8 @@ var globalModuleMap map[string]string
 var downloadedModules map[string]bool
 // 保护downloadedModules的互斥锁
 var downloadedModulesMutex sync.Mutex
+// 保护globalModuleMap的互斥锁
+var globalModuleMapMutex sync.Mutex
 // 是否压缩代码
 var minify bool
 // API 基础 URL
@@ -677,12 +679,6 @@ func compileFile(content string, filename string) (string, error) {
     // 检查文件类型
     fileExt := filepath.Ext(filename)
     
-    // 对于CSS文件，直接返回原内容，不进行编译
-    if fileExt == ".css" {
-        logger.Debug(LogCatCompile, "CSS文件不需要编译: %s", filename)
-        return content, nil
-    }
-    
     // 确定文件类型
     var lang string
     switch fileExt {
@@ -694,6 +690,8 @@ func compileFile(content string, filename string) (string, error) {
         lang = "jsx"
     case ".js":
         lang = "js"
+    case ".css":
+        lang = "css"
     default:
         logger.Error(LogCatCompile, "不支持的文件类型: %s", fileExt)
         return "", fmt.Errorf("不支持的文件类型: %s", fileExt)
@@ -706,9 +704,11 @@ func compileFile(content string, filename string) (string, error) {
     
     // 构建自定义 importmap，基于已下载的模块
     customImportMap := make(map[string]string)
+    globalModuleMapMutex.Lock()
     for moduleName, localPath := range globalModuleMap {
         customImportMap[moduleName] = localPath
     }
+    globalModuleMapMutex.Unlock()
     
     importMapBytes, err := json.Marshal(map[string]map[string]string{
         "imports": customImportMap,
@@ -716,6 +716,70 @@ func compileFile(content string, filename string) (string, error) {
     if err != nil {
         logger.Error(LogCatCompile, "创建 importmap 失败: %v", err)
         return "", fmt.Errorf("创建 importmap 失败: %v", err)
+    }
+    
+    // 对于CSS文件，使用不同的转换处理
+    if lang == "css" {
+        logger.Debug(LogCatCompile, "处理CSS文件: %s", filename)
+        
+        // 构建CSS请求
+        transformRequest := struct {
+            Code      string          `json:"code"`
+            Filename  string          `json:"filename"`
+            Lang      string          `json:"lang"`
+            ImportMap json.RawMessage `json:"importMap"`
+            Minify    bool            `json:"minify"`
+        }{
+            Code:      content,
+            Filename:  filename,
+            Lang:      "css",
+            ImportMap: importMapBytes,
+            Minify:    minify,
+        }
+        
+        // 序列化请求
+        reqBody, err := json.Marshal(transformRequest)
+        if err != nil {
+            logger.Error(LogCatCompile, "序列化CSS请求失败: %v", err)
+            return "", fmt.Errorf("序列化CSS请求失败: %v", err)
+        }
+        
+        // 发送请求
+        logger.Debug(LogCatNetwork, "发送CSS编译请求: %s/transform", apiBaseURL)
+        resp, err := http.Post(apiBaseURL + "/transform", "application/json", strings.NewReader(string(reqBody)))
+        if err != nil {
+            logger.Error(LogCatNetwork, "发送CSS编译请求失败: %v", err)
+            // 如果请求失败，回退到使用原始内容
+            logger.Info(LogCatCompile, "CSS编译请求失败，使用原始内容: %s", filename)
+            return content, nil
+        }
+        defer resp.Body.Close()
+        
+        if resp.StatusCode != http.StatusOK {
+            body, _ := io.ReadAll(resp.Body)
+            logger.Error(LogCatNetwork, "CSS编译请求失败: %d %s - %s", resp.StatusCode, resp.Status, string(body))
+            // 如果请求失败，回退到使用原始内容
+            logger.Info(LogCatCompile, "CSS编译请求失败，使用原始内容: %s", filename)
+            return content, nil
+        }
+        
+        // 解析响应
+        var result struct {
+            Code string `json:"code"`
+            Map  string `json:"map"`
+        }
+        
+        if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+            logger.Error(LogCatCompile, "解析CSS编译响应失败: %v", err)
+            // 如果解析失败，回退到使用原始内容
+            return content, nil
+        }
+        
+        logger.Debug(LogCatCompile, "CSS编译成功: %s", filename)
+        
+        // 处理编译后的CSS，替换路径等
+        processedCss := processWrapperContent([]byte(result.Code), apiDomain)
+        return string(processedCss), nil
     }
     
     // 构建请求
@@ -1023,11 +1087,15 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         if localModuleMap != nil {
             localModuleMap[spec] = normalizedModulePath
         }
+        globalModuleMapMutex.Lock()
         globalModuleMap[spec] = normalizedModulePath
+        globalModuleMapMutex.Unlock()
     } else if modulePath != "" {
         // 对于子模块，也添加到全局映射中
         normalizedModulePath := normalizeModulePath("/" + modulePath)
+        globalModuleMapMutex.Lock()
         globalModuleMap[modulePath] = normalizedModulePath
+        globalModuleMapMutex.Unlock()
     }
     
     // 下载所有依赖
@@ -1208,7 +1276,7 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
         fileExt := filepath.Ext(currentFile)
         
         // 对于不需要编译的文件类型，直接复制
-        if fileExt == ".css" || fileExt == ".svg" || fileExt == ".json" {
+        if fileExt == ".svg" || fileExt == ".json" {
             // 复制文件
             if err := copyFile(srcPath, filepath.Join(outDir, currentFile)); err != nil {
                 return fmt.Errorf("复制资源文件失败 %s: %v", srcPath, err)
@@ -1219,6 +1287,35 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
             logger.Debug(LogCatFS, "复制非模块文件: %s -> %s", srcPath, filepath.Join(outDir, currentFile))
             continue
         }
+        
+        // // CSS 文件特殊处理 - 使用 compileFile 而不是简单复制
+        // if fileExt == ".css" {
+        //     // 读取 CSS 源文件内容
+        //     cssContent, err := os.ReadFile(srcPath)
+        //     if err != nil {
+        //         return fmt.Errorf("读取 CSS 文件失败 %s: %v", srcPath, err)
+        //     }
+            
+        //     // 编译 CSS 文件
+        //     logger.Debug(LogCatCompile, "开始编译 CSS 文件: %s", currentFile)
+        //     compiledCss, err := compileFile(string(cssContent), currentFile)
+        //     if err != nil {
+        //         logger.Error(LogCatCompile, "编译 CSS 文件失败: %v, 使用原始内容", err)
+        //         // 如果编译失败，使用原始内容
+        //         compiledCss = string(cssContent)
+        //     }
+            
+        //     // 写入编译后的 CSS 文件
+        //     cssOutputPath := filepath.Join(outDir, currentFile)
+        //     if err := os.WriteFile(cssOutputPath, []byte(compiledCss), 0644); err != nil {
+        //         return fmt.Errorf("保存编译后的 CSS 文件失败 %s: %v", cssOutputPath, err)
+        //     }
+            
+        //     // 标记为已处理
+        //     compiledFiles[currentFile] = true
+        //     logger.Debug(LogCatCompile, "CSS 文件处理完成: %s -> %s", srcPath, cssOutputPath)
+        //     continue
+        // }
         
         // 读取源文件内容
         srcContent, err := os.ReadFile(srcPath)
