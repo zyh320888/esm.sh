@@ -922,14 +922,14 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     // 仅在处理前后内容一样时才显示日志
     if string(moduleContent) == string(processedContent) {
         logger.Debug(LogCatContent, "处理模块内容中的依赖路径: %s", url)
-        logger.Debug(LogCatContent, "检测到内容未发生变化")
+        // logger.Debug(LogCatContent, "检测到内容未发生变化")
         // 显示处理前的内容头100字节（仅调试级别）
         if len(moduleContent) > headN {
             logger.Debug(LogCatContent, "处理前的内容头 %d 字节: %s", headN, string(moduleContent[:headN]))
         } else {
             logger.Debug(LogCatContent, "处理前的内容: %s", string(moduleContent))
         }
-        logger.Debug(LogCatContent, "处理模块内容中的依赖路径完成: %s", url)
+        // logger.Debug(LogCatContent, "处理模块内容中的依赖路径完成: %s", url)
     } else {
         // logger.Debug(LogCatContent, "内容已发生变化")
     }
@@ -1314,11 +1314,11 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
     // 如 import "/react-dom@19.0.0/es2022/react-dom.mjs" 
     // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
     // 变为 import "/esm.d8d.fun/react-dom@19.0.0/es2022/react-dom.mjs"
-    importRegex := regexp.MustCompile(`(import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/.+?)["']`)
+    importRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/.+?)["']`)
     contentStr = importRegex.ReplaceAllStringFunc(contentStr, func(match string) string {
         parts := importRegex.FindStringSubmatch(match)
-        if len(parts) >= 3 {
-            originalPath := parts[2]
+        if len(parts) >= 2 {
+            originalPath := parts[1]
             
             // 检查路径是否已经包含API域名
             if !strings.Contains(originalPath, "/"+apiDomain+"/") {
