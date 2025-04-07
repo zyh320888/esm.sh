@@ -811,6 +811,96 @@ func compileFile(content string, filename string) (string, error) {
     return compiledCode, nil
 }
 
+// 规范化模块路径，处理扩展名和index.js
+func normalizeModulePath(path string) string {
+    // 分离路径和查询参数
+    var query string
+    if strings.Contains(path, "?") {
+        pathParts := strings.SplitN(path, "?", 2)
+        path = pathParts[0]
+        query = "?" + pathParts[1]
+    } else {
+        query = ""
+    }
+    
+    // 处理路径部分
+    pathParts := strings.Split(path, "/")
+    
+    // 获取路径的各部分
+    lastIndex := len(pathParts) - 1
+    lastPart := ""
+    if lastIndex >= 0 {
+        lastPart = pathParts[lastIndex]
+    }
+    
+    // 检查是否为作用域包（@开头的包）
+    isScope := false
+    scopeIndex := -1
+    for i, part := range pathParts {
+        if part != "" && strings.HasPrefix(part, "@") {
+            isScope = true
+            scopeIndex = i
+            break
+        }
+    }
+    
+    // 根据路径类型添加适当的后缀
+    if isScope {
+        // 检查是否是作用域包的主模块
+        // 主模块判断: 后面没有更多路径部分，或者直接是@xxxx/yyyy格式
+        isScopeMainModule := false
+        
+        // 如果作用域包名后面没有更多路径部分（@scope/pkg 或 @scope/pkg/）
+        if scopeIndex < len(pathParts)-2 {
+            // 有超过包名以外的路径，是子模块
+            isScopeMainModule = false
+        } else if scopeIndex == len(pathParts)-2 {
+            // 刚好是包名（@scope/pkg），是主模块
+            isScopeMainModule = true
+        } else if scopeIndex == len(pathParts)-1 && strings.Contains(pathParts[scopeIndex], "/") {
+            // 如果@scope/pkg被当作一个整体在路径中，也视为主模块
+            isScopeMainModule = true
+        }
+        
+        if isScopeMainModule || lastPart == "" || strings.HasSuffix(path, "/") {
+            // 作用域包主模块，添加index.js
+            // 例如 /@ant-design/icons 或 /@ant-design/icons/ -> /@ant-design/icons/index.js
+            if strings.HasSuffix(path, "/") {
+                path = path + "index.js"
+            } else {
+                path = path + "/index.js"
+            }
+            logger.Debug(LogCatDependency, "为作用域包主模块添加index.js: %s", path)
+        } else if !strings.HasSuffix(lastPart, ".js") && !strings.HasSuffix(lastPart, ".mjs") && !strings.HasSuffix(lastPart, ".cjs") {
+            // 作用域包子模块，添加.js后缀
+            // 例如 /@ant-design/icons/xxx -> /@ant-design/icons/xxx.js
+            pathParts[len(pathParts)-1] = lastPart + ".js"
+            path = strings.Join(pathParts, "/")
+            logger.Debug(LogCatDependency, "为作用域包子模块添加.js后缀: %s", path)
+        }
+    } else if lastPart == "" || !strings.Contains(path, "/") || strings.HasSuffix(path, "/") {
+        // 普通主模块，添加index.js
+        // 例如 /react-dom@19.0.0 或 /react-dom@19.0.0/ -> /react-dom@19.0.0/index.js
+        if !strings.HasSuffix(path, "/index.js") && !strings.HasSuffix(path, "/index.mjs") {
+            if strings.HasSuffix(path, "/") {
+                path = path + "index.js"
+            } else {
+                path = path + "/index.js"
+            }
+            logger.Debug(LogCatDependency, "为普通主模块添加index.js: %s", path)
+        }
+    } else if !strings.HasSuffix(lastPart, ".js") && !strings.HasSuffix(lastPart, ".mjs") && !strings.HasSuffix(lastPart, ".cjs") {
+        // 普通子模块，添加.js后缀
+        // 例如 /react-dom@19.0.0/utils -> /react-dom@19.0.0/utils.js
+        pathParts[len(pathParts)-1] = lastPart + ".js"
+        path = strings.Join(pathParts, "/")
+        logger.Debug(LogCatDependency, "为普通子模块添加.js后缀: %s", path)
+    }
+    
+    // 重新添加查询参数
+    return path + query
+}
+
 // 下载并处理模块的通用函数
 func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, semaphore chan struct{}, errChan chan error, localModuleMap map[string]string) {
     // 如果提供了waitgroup，在完成时通知
@@ -867,41 +957,13 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     // 使用传入的输出目录和API域名
     esmDir := filepath.Join(outDir, apiDomain)
     
-    // 确定模块的保存路径
-    moduleBase := filepath.Dir(modulePath)
-    if moduleBase == "." {
-        moduleBase = modulePath
-    }
+    // 使用normalizeModulePath规范化路径
+    normalizedPath := normalizeModulePath("/" + modulePath)
+    // 移除前导斜杠，因为filepath.Join不需要它
+    normalizedPath = strings.TrimPrefix(normalizedPath, "/")
     
-    var moduleSavePath string
-    if strings.HasSuffix(modulePath, "/") || !strings.Contains(modulePath, "/") {
-        // 主模块使用index.js
-        moduleSavePath = filepath.Join(esmDir, moduleBase, "index.js")
-    } else {
-        // 子模块使用对应文件名
-        filename := filepath.Base(modulePath)
-        // 修复：检查路径中是否有重复的目录结构
-        if strings.Contains(modulePath, apiDomain) {
-            // 从路径中移除重复的域名部分
-            parts := strings.Split(modulePath, apiDomain)
-            if len(parts) > 1 {
-                modulePath = parts[len(parts)-1]
-                logger.Debug(LogCatDependency, "检测到路径中有重复的域名，修正为: %s", modulePath)
-                moduleBase = filepath.Dir(modulePath)
-                filename = filepath.Base(modulePath)
-            }
-        }
-        
-        // 检查文件名是否已有扩展名
-        ext := filepath.Ext(filename)
-        if ext == "" || (ext != ".js" && ext != ".mjs" && ext != ".cjs") {
-            // 没有扩展名或不是标准JS扩展名，添加.js后缀
-            moduleSavePath = filepath.Join(esmDir, moduleBase, filename + ".js")
-        } else {
-            // 已有标准扩展名，保留原样
-            moduleSavePath = filepath.Join(esmDir, moduleBase, filename)
-        }
-    }
+    // 确定模块的保存路径
+    moduleSavePath := filepath.Join(esmDir, normalizedPath)
     
     // 创建模块目录
     if err := os.MkdirAll(filepath.Dir(moduleSavePath), 0755); err != nil {
@@ -1349,25 +1411,18 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
             
             // 检查路径是否已经包含API域名
             if !strings.Contains(originalPath, "/"+apiDomain+"/") {
-                // 分离路径和查询参数
-                path := originalPath
-                var query string
-                if strings.Contains(path, "?") {
-                    pathParts := strings.SplitN(path, "?", 2)
-                    path = pathParts[0]
-                    query = "?" + pathParts[1]
-                } else {
-                    query = ""
-                }
+                // 规范化模块路径
+                normalizedPath := normalizeModulePath(originalPath)
                 
                 // 替换为带API域名的路径
                 var newPath string
-                if basePath != "" && !strings.HasPrefix(path, basePath) {
+                if basePath != "" && !strings.HasPrefix(normalizedPath, basePath) {
                     // 如果设置了basePath，添加前缀
-                    newPath = basePath + "/" + apiDomain + path + query
+                    newPath = basePath + "/" + apiDomain + normalizedPath
                 } else {
-                    newPath = "/" + apiDomain + path + query
+                    newPath = "/" + apiDomain + normalizedPath
                 }
+                
                 return strings.Replace(match, originalPath, newPath, 1)
             }
         }
