@@ -1393,8 +1393,9 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
     // 处理裸导入路径，添加API域名前缀
     // 如 import "/react-dom@19.0.0/es2022/react-dom.mjs" 
     // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
+    // import Q from"/axios@1.6.2/index.js";
     // 变为 import "/esm.d8d.fun/react-dom@19.0.0/es2022/react-dom.mjs"
-    importRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/.+?)["']`)
+    importRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import\s+[^"'\s]+\s+from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/.+?)["']`)
     contentStr = importRegex.ReplaceAllStringFunc(contentStr, func(match string) string {
         parts := importRegex.FindStringSubmatch(match)
         if len(parts) >= 2 {
