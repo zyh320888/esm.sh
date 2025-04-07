@@ -12,6 +12,7 @@ import (
     "sync"
     
     "github.com/ije/gox/log"
+    "github.com/ije/gox/utils"
 )
 
 // Logger 管理不同类别的日志
@@ -777,9 +778,19 @@ func compileFile(content string, filename string) (string, error) {
         
         logger.Debug(LogCatCompile, "CSS编译成功: %s", filename)
         
-        // 处理编译后的CSS，替换路径等
-        processedCss := processWrapperContent([]byte(result.Code), apiDomain)
-        return string(processedCss), nil
+        // 检查服务器返回的是否已经是JS模块，如果不是则在客户端进行转换
+        cssContent := result.Code
+        if !strings.Contains(cssContent, "document.createElement('style')") {
+            logger.Debug(LogCatCompile, "服务器返回原始CSS内容，在客户端转换为JS模块")
+            // 将CSS内容转换为JavaScript模块
+            cssContent = fmt.Sprintf("var style = document.createElement('style');\nstyle.textContent = %s;\ndocument.head.appendChild(style);\nexport default null;", utils.MustEncodeJSON(result.Code))
+        } else {
+            logger.Debug(LogCatCompile, "服务器已返回JS模块格式的CSS")
+        }
+        
+        // 处理编译后的CSS/JS，替换路径等
+        processedContent := processWrapperContent([]byte(cssContent), apiDomain)
+        return string(processedContent), nil
     }
     
     // 构建请求
