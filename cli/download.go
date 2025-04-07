@@ -769,15 +769,20 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         return
     }
     
-    // 从模块中提取实际模块路径
-    exportRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[^"']+?)["']`)
-    exportMatches := exportRegex.FindAllSubmatch(moduleContent, -1)
+    // 查找模块中的深层依赖（在处理内容之前）
+    depPaths := findDeepDependencies(moduleContent)
+    fmt.Printf("分析模块中的依赖: %s\n", url)
+    if len(depPaths) > 0 {
+        fmt.Printf("✅ 共发现 %d 个依赖\n", len(depPaths))
+    } else {
+        fmt.Printf("⚠️ 未发现任何依赖\n")
+    }
     
     // 处理模块内容中的路径
-    moduleContent = processWrapperContent(moduleContent, apiDomain)
+    processedContent := processWrapperContent(moduleContent, apiDomain)
     
     // 保存处理后的模块
-    if err := os.WriteFile(moduleSavePath, moduleContent, 0644); err != nil {
+    if err := os.WriteFile(moduleSavePath, processedContent, 0644); err != nil {
         fmt.Printf("保存模块失败: %v\n", err)
         if errChan != nil {
             errChan <- fmt.Errorf("保存模块失败: %v", err)
@@ -805,50 +810,20 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         globalModuleMap[modulePath] = "/" + modulePath + ".js"
     }
     
-    // 下载所有实际模块路径
-    for _, match := range exportMatches {
-        if len(match) < 2 {
-            continue
-        }
-        
-        actualPath := string(match[1])
-        if !strings.HasPrefix(actualPath, "/") {
-            actualPath = "/" + actualPath
-        }
-        
-        // 保存原始路径（带查询参数）用于URL请求
-        originalPath := actualPath
-        
-        // 去除路径中的查询参数，用于文件系统路径
-        if strings.Contains(actualPath, "?") {
-            actualPath = strings.Split(actualPath, "?")[0]
-        }
-        
-        // 使用带查询参数的URL进行请求
-        actualUrl := apiBaseURL + originalPath
-        
-        // 递归下载实际模块
-        if wg != nil {
-            wg.Add(1)
-        }
-        go downloadAndProcessModule("", actualUrl, outDir, wg, semaphore, errChan, localModuleMap)
-    }
-    
-    // 查找模块中的深层依赖
-    depPaths := findDeepDependencies(moduleContent)
+    // 下载所有依赖
     for _, depPath := range depPaths {
         depUrl := apiBaseURL + depPath
         downloadedModulesMutex.Lock()
         alreadyDownloaded := downloadedModules[depUrl]
         downloadedModulesMutex.Unlock()
         if !alreadyDownloaded {
-            fmt.Printf("🚀 开始递归下载深层依赖: %s\n", depUrl)
+            fmt.Printf("🚀 开始递归下载依赖: %s\n", depUrl)
             if wg != nil {
                 wg.Add(1)
             }
             go downloadAndProcessModule("", depUrl, outDir, wg, semaphore, errChan, localModuleMap)
         } else {
-            fmt.Printf("⏩ 跳过已下载的深层依赖: %s\n", depUrl)
+            fmt.Printf("⏩ 跳过已下载的依赖: %s\n", depUrl)
         }
     }
     
