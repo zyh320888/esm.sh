@@ -769,15 +769,6 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         return
     }
     
-    // 查找模块中的深层依赖（在处理内容之前）
-    depPaths := findDeepDependencies(moduleContent)
-    fmt.Printf("分析模块中的依赖: %s\n", url)
-    if len(depPaths) > 0 {
-        fmt.Printf("✅ 共发现 %d 个依赖\n", len(depPaths))
-    } else {
-        fmt.Printf("⚠️ 未发现任何依赖\n")
-    }
-    
     // 处理模块内容中的路径
     processedContent := processWrapperContent(moduleContent, apiDomain)
     
@@ -789,6 +780,16 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         }
         return
     }
+    
+    // 查找模块中的深层依赖（在处理内容之前）
+    depPaths := findDeepDependencies(moduleContent)
+    fmt.Printf("分析模块中的依赖: %s\n", url)
+    if len(depPaths) > 0 {
+        fmt.Printf("✅ 共发现 %d 个依赖\n", len(depPaths))
+    } else {
+        fmt.Printf("⚠️ 未发现任何依赖\n")
+    }
+    
     
     // 设置模块映射（如果提供了spec）
     if spec != "" {
@@ -1149,6 +1150,7 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
 
     // 处理裸导入路径，添加API域名前缀
     // 如 import "/react-dom@19.0.0/es2022/react-dom.mjs" 
+    // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
     // 变为 import "/esm.d8d.fun/react-dom@19.0.0/es2022/react-dom.mjs"
     importRegex := regexp.MustCompile(`(import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/.+?)["']`)
     contentStr = importRegex.ReplaceAllStringFunc(contentStr, func(match string) string {
