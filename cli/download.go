@@ -770,7 +770,29 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     }
     
     // 处理模块内容中的路径
+    fmt.Printf("处理模块内容中的依赖路径: %s\n", url)
     processedContent := processWrapperContent(moduleContent, apiDomain)
+    
+    // 仅在处理前后内容一样时才显示日志
+    if string(moduleContent) == string(processedContent) {
+        fmt.Println("检测到内容未发生变化")
+        // 显示处理前的内容头100字节
+        if len(moduleContent) > 100 {
+            fmt.Printf("处理前的内容头100字节: %s\n", string(moduleContent[:100]))
+        } else {
+            fmt.Printf("处理前的内容: %s\n", string(moduleContent))
+        }
+        
+        // 显示处理后的内容头100字节
+        if len(processedContent) > 100 {
+            fmt.Printf("处理后的内容头100字节: %s\n", string(processedContent[:100]))
+        } else {
+            fmt.Printf("处理后的内容: %s\n", string(processedContent))
+        }
+    } else {
+        fmt.Println("内容已发生变化，跳过显示")
+    }
+    fmt.Printf("处理模块内容中的依赖路径完成: %s\n", url)
     
     // 保存处理后的模块
     if err := os.WriteFile(moduleSavePath, processedContent, 0644); err != nil {
