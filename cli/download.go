@@ -851,6 +851,10 @@ func compileFile(content string, filename string) (string, error) {
     localImportRegex := regexp.MustCompile(`from\s*["'`+"`"+`](\.[^"'`+"`"+`]+)(\.tsx|\.ts|\.jsx)["'`+"`"+`]`)
     compiledCode = localImportRegex.ReplaceAllString(compiledCode, `from "$1.js"`)
     
+    // 处理没有from关键字的CSS导入 (如 import './style.css')
+    simpleCssImportRegex := regexp.MustCompile(`import\s*["'`+"`"+`](\.[^"'`+"`"+`]+)(\.css)["'`+"`"+`]`)
+    compiledCode = simpleCssImportRegex.ReplaceAllString(compiledCode, `import "$1$2.js"`)
+    
     logger.Debug(LogCatCompile, "编译文件处理完成: %s", filename)
     return compiledCode, nil
 }
@@ -1288,34 +1292,34 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
             continue
         }
         
-        // // CSS 文件特殊处理 - 使用 compileFile 而不是简单复制
-        // if fileExt == ".css" {
-        //     // 读取 CSS 源文件内容
-        //     cssContent, err := os.ReadFile(srcPath)
-        //     if err != nil {
-        //         return fmt.Errorf("读取 CSS 文件失败 %s: %v", srcPath, err)
-        //     }
+        // CSS 文件特殊处理 - 使用 compileFile 进行编译，并保存为JS模块
+        if fileExt == ".css" {
+            // 读取 CSS 源文件内容
+            cssContent, err := os.ReadFile(srcPath)
+            if err != nil {
+                return fmt.Errorf("读取 CSS 文件失败 %s: %v", srcPath, err)
+            }
             
-        //     // 编译 CSS 文件
-        //     logger.Debug(LogCatCompile, "开始编译 CSS 文件: %s", currentFile)
-        //     compiledCss, err := compileFile(string(cssContent), currentFile)
-        //     if err != nil {
-        //         logger.Error(LogCatCompile, "编译 CSS 文件失败: %v, 使用原始内容", err)
-        //         // 如果编译失败，使用原始内容
-        //         compiledCss = string(cssContent)
-        //     }
+            // 编译 CSS 文件
+            logger.Debug(LogCatCompile, "开始编译 CSS 文件: %s", currentFile)
+            compiledCss, err := compileFile(string(cssContent), currentFile)
+            if err != nil {
+                logger.Error(LogCatCompile, "编译 CSS 文件失败: %v, 使用原始内容", err)
+                // 如果编译失败，使用原始内容
+                compiledCss = string(cssContent)
+            }
             
-        //     // 写入编译后的 CSS 文件
-        //     cssOutputPath := filepath.Join(outDir, currentFile)
-        //     if err := os.WriteFile(cssOutputPath, []byte(compiledCss), 0644); err != nil {
-        //         return fmt.Errorf("保存编译后的 CSS 文件失败 %s: %v", cssOutputPath, err)
-        //     }
+            // 写入编译后的CSS文件 - 保存为.css.js文件
+            cssOutputPath := filepath.Join(outDir, currentFile + ".js")
+            if err := os.WriteFile(cssOutputPath, []byte(compiledCss), 0644); err != nil {
+                return fmt.Errorf("保存编译后的 CSS 文件失败 %s: %v", cssOutputPath, err)
+            }
             
-        //     // 标记为已处理
-        //     compiledFiles[currentFile] = true
-        //     logger.Debug(LogCatCompile, "CSS 文件处理完成: %s -> %s", srcPath, cssOutputPath)
-        //     continue
-        // }
+            // 标记为已处理
+            compiledFiles[currentFile] = true
+            logger.Debug(LogCatCompile, "CSS 文件处理完成: %s -> %s", srcPath, cssOutputPath)
+            continue
+        }
         
         // 读取源文件内容
         srcContent, err := os.ReadFile(srcPath)
