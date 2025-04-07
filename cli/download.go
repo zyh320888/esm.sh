@@ -397,17 +397,33 @@ func DownloadDependencies(args []string) error {
                 // 在这里立即对下载的实际模块进行递归分析
                 // 提取模块中的深层依赖
                 depPaths := findDeepDependencies(actualContent)
+                // 添加日志：总结发现的依赖数量
+                fmt.Printf("分析实际模块中的深层依赖: %s\n", actualPath)
+                if len(depPaths) > 0 {
+                    fmt.Printf("✅ 共发现 %d 个深层依赖\n", len(depPaths))
+                } else {
+                    fmt.Printf("⚠️ 未发现任何深层依赖\n")
+                    // 取actualContent中头200字节
+                    fmt.Printf("实际模块内容: %s\n", string(actualContent[:200]))
+                }
                 for _, depPath := range depPaths {
                     depUrl := apiBaseURL + depPath
                     if !downloadedModules[depUrl] {
+                        // 添加日志：开始递归下载
+                        fmt.Printf("🚀 开始递归下载依赖: %s\n", depUrl)
+                        
                         // 使用新的goroutine递归处理依赖
                         wg.Add(1)
                         go func(depPath, depUrl string) {
                             defer wg.Done()
                             downloadSubModule("", depPath, depUrl, outDir, semaphore, errChan)
                         }(depPath, depUrl)
+                    } else {
+                        // 添加日志：跳过已下载的依赖
+                        fmt.Printf("⏩ 跳过已下载的依赖: %s\n", depUrl)
                     }
                 }
+                
             }
             
             // 现在处理包装器模块内容中的路径 (在处理所有实际模块后)
@@ -981,7 +997,10 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
                 depURL := constructDependencyURL(dep, apiBaseURL)
                 if depURL != "" && !downloadedModules[depURL] {
                     // 递归下载子依赖
+                    fmt.Printf("📦 递归下载裸依赖: %s -> %s\n", dep, depURL)
                     go downloadSubModule("", dep, depURL, outDir, semaphore, errChan)
+                } else if depURL != "" {
+                    fmt.Printf("⏩ 跳过已下载的裸依赖: %s\n", depURL)
                 }
             }
         }
@@ -1039,7 +1058,7 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
         
         actualPaths = append(actualPaths, actualPath)
         
-        // 分析实际模块中的依赖
+        // 分析实际模块中的裸依赖
         bareImports := findBareImports(actualContent)
         for _, dep := range bareImports {
             if !isLocalPath(dep) && !strings.HasPrefix(dep, "/") {
@@ -1047,8 +1066,24 @@ func downloadSubModule(parentModule, subModule, url, outDir string, semaphore ch
                 depURL := constructDependencyURL(dep, apiBaseURL)
                 if depURL != "" && !downloadedModules[depURL] {
                     // 递归下载子依赖
+                    fmt.Printf("📦 递归下载裸依赖: %s -> %s\n", dep, depURL)
                     go downloadSubModule("", dep, depURL, outDir, semaphore, errChan)
+                } else if depURL != "" {
+                    fmt.Printf("⏩ 跳过已下载的裸依赖: %s\n", depURL)
                 }
+            }
+        }
+        
+        // 分析实际模块中的深层依赖（直接路径引用）
+        fmt.Printf("分析实际模块中的深层依赖: %s\n", actualPath)
+        depPaths := findDeepDependencies(actualContent)
+        for _, depPath := range depPaths {
+            depUrl := apiBaseURL + depPath
+            if !downloadedModules[depUrl] {
+                fmt.Printf("🔍 递归下载深层依赖: %s\n", depUrl)
+                go downloadSubModule("", depPath, depUrl, outDir, semaphore, errChan)
+            } else {
+                fmt.Printf("⏩ 跳过已下载的深层依赖: %s\n", depUrl)
             }
         }
     }
@@ -1079,7 +1114,7 @@ func isLocalPath(path string) bool {
 // 查找模块中的裸导入（不带路径前缀的导入）
 func findBareImports(content []byte) []string {
     // 使用正则表达式找出所有import语句中的裸导入
-    importRegex := regexp.MustCompile(`(?:import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["']([^"'./][^"']+)["']`)
+    importRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["']([^"'./][^"']+)["']`)
     matches := importRegex.FindAllSubmatch(content, -1)
     
     var bareImports []string
@@ -1371,7 +1406,7 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
     // 处理裸导入路径，添加API域名前缀
     // 如 import "/react-dom@19.0.0/es2022/react-dom.mjs" 
     // 变为 import "/esm.d8d.fun/react-dom@19.0.0/es2022/react-dom.mjs"
-    importRegex := regexp.MustCompile(`(import|export\s+\*\s+from|export\s+\{\s*[^}]*\}\s+from)\s+["'](\/.+?)["']`)
+    importRegex := regexp.MustCompile(`(import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/.+?)["']`)
     contentStr = importRegex.ReplaceAllStringFunc(contentStr, func(match string) string {
         parts := importRegex.FindStringSubmatch(match)
         if len(parts) >= 3 {
@@ -1410,11 +1445,16 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
 // 从模块内容中找出深层依赖
 func findDeepDependencies(content []byte) []string {
     // 提取形如 "/react-dom@19.0.0/es2022/react-dom.mjs" 的依赖路径
-    dependencyRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[@\w\d\.\-]+\/[^"']+)["']`)
+    // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
+    // dependencyRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[@\w\d\.\-]+\/[^"']+)["']`)
+    dependencyRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[@\w\d\.\-]+\/[^"']+)["']`)
     matches := dependencyRegex.FindAllSubmatch(content, -1)
     
     var deps []string
     seen := make(map[string]bool)
+    
+    // 添加日志：显示正在分析的内容长度
+    fmt.Printf("正在分析模块内容，长度: %d 字节\n", len(content))
     
     for _, match := range matches {
         if len(match) >= 2 {
@@ -1422,9 +1462,12 @@ func findDeepDependencies(content []byte) []string {
             if !seen[dep] {
                 seen[dep] = true
                 deps = append(deps, dep)
+                // 添加日志：每发现一个依赖就记录
+                fmt.Printf("🔍 发现依赖: %s\n", dep)
             }
         }
     }
+    
     
     return deps
 } 
