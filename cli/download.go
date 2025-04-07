@@ -891,7 +891,16 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
                 filename = filepath.Base(modulePath)
             }
         }
-        moduleSavePath = filepath.Join(esmDir, moduleBase, filename + ".js")
+        
+        // 检查文件名是否已有扩展名
+        ext := filepath.Ext(filename)
+        if ext == "" || (ext != ".js" && ext != ".mjs" && ext != ".cjs") {
+            // 没有扩展名或不是标准JS扩展名，添加.js后缀
+            moduleSavePath = filepath.Join(esmDir, moduleBase, filename + ".js")
+        } else {
+            // 已有标准扩展名，保留原样
+            moduleSavePath = filepath.Join(esmDir, moduleBase, filename)
+        }
     }
     
     // 创建模块目录
@@ -955,12 +964,23 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     
     // 设置模块映射（如果提供了spec）
     if spec != "" {
+        // 检查modulePath是否有扩展名
+        ext := filepath.Ext(modulePath)
+        // 如果是子模块使用完整路径
         if strings.Contains(spec, "/") {
-            // 子模块使用完整路径
-            if localModuleMap != nil {
-                localModuleMap[spec] = "/" + modulePath + ".js"
+            if ext == "" || (ext != ".js" && ext != ".mjs" && ext != ".cjs") {
+                // 没有扩展名，添加.js
+                if localModuleMap != nil {
+                    localModuleMap[spec] = "/" + modulePath + ".js"
+                }
+                globalModuleMap[spec] = "/" + modulePath + ".js"
+            } else {
+                // 已有扩展名，不添加.js
+                if localModuleMap != nil {
+                    localModuleMap[spec] = "/" + modulePath
+                }
+                globalModuleMap[spec] = "/" + modulePath
             }
-            globalModuleMap[spec] = "/" + modulePath + ".js"
         } else {
             // 主模块使用index.js
             if localModuleMap != nil {
@@ -970,7 +990,14 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         }
     } else if modulePath != "" {
         // 对于子模块，也添加到全局映射中
-        globalModuleMap[modulePath] = "/" + modulePath + ".js"
+        ext := filepath.Ext(modulePath)
+        if ext == "" || (ext != ".js" && ext != ".mjs" && ext != ".cjs") {
+            // 没有扩展名，添加.js
+            globalModuleMap[modulePath] = "/" + modulePath + ".js"
+        } else {
+            // 已有扩展名，不添加.js
+            globalModuleMap[modulePath] = "/" + modulePath
+        }
     }
     
     // 下载所有依赖
@@ -990,25 +1017,25 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         }
     }
     
-    // 查找裸导入
-    bareImports := findBareImports(moduleContent)
-    for _, imp := range bareImports {
-        if !isLocalPath(imp) && !strings.HasPrefix(imp, "/") {
-            depURL := constructDependencyURL(imp, apiBaseURL)
-            downloadedModulesMutex.Lock()
-            alreadyDownloaded := downloadedModules[depURL]
-            downloadedModulesMutex.Unlock()
-            if depURL != "" && !alreadyDownloaded {
-                logger.Info(LogCatDependency, "📦 递归下载裸依赖: %s -> %s", imp, depURL)
-                if wg != nil {
-                    wg.Add(1)
-                }
-                go downloadAndProcessModule("", depURL, outDir, wg, semaphore, errChan, localModuleMap)
-            } else if depURL != "" {
-                logger.Debug(LogCatDependency, "⏩ 跳过已下载的裸依赖: %s", depURL)
-            }
-        }
-    }
+    // // 查找裸导入
+    // bareImports := findBareImports(moduleContent)
+    // for _, imp := range bareImports {
+    //     if !isLocalPath(imp) && !strings.HasPrefix(imp, "/") {
+    //         depURL := constructDependencyURL(imp, apiBaseURL)
+    //         downloadedModulesMutex.Lock()
+    //         alreadyDownloaded := downloadedModules[depURL]
+    //         downloadedModulesMutex.Unlock()
+    //         if depURL != "" && !alreadyDownloaded {
+    //             logger.Info(LogCatDependency, "📦 递归下载裸依赖: %s -> %s", imp, depURL)
+    //             if wg != nil {
+    //                 wg.Add(1)
+    //             }
+    //             go downloadAndProcessModule("", depURL, outDir, wg, semaphore, errChan, localModuleMap)
+    //         } else if depURL != "" {
+    //             logger.Debug(LogCatDependency, "⏩ 跳过已下载的裸依赖: %s", depURL)
+    //         }
+    //     }
+    // }
     
     logger.Debug(LogCatDependency, "模块处理完成: %s", url)
 }
