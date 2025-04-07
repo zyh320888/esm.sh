@@ -784,7 +784,7 @@ func compileFile(content string, filename string) (string, error) {
     compiledCode = string(processedCode)
     
     // 替换本地相对路径引用的扩展名（.tsx/.ts/.jsx -> .js）
-    localImportRegex := regexp.MustCompile(`from\s+["'](\.[^"']+)(\.tsx|\.ts|\.jsx)["']`)
+    localImportRegex := regexp.MustCompile(`from\s*["'`+"`"+`](\.[^"'`+"`"+`]+)(\.tsx|\.ts|\.jsx)["'`+"`"+`]`)
     compiledCode = localImportRegex.ReplaceAllString(compiledCode, `from "$1.js"`)
     
     logger.Debug(LogCatCompile, "编译文件处理完成: %s", filename)
