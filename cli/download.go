@@ -779,29 +779,9 @@ func compileFile(content string, filename string) (string, error) {
     // 进一步处理编译后的代码，将引用替换为本地路径
     compiledCode := result.Code
     
-    // 修复重复的 /esm.sh 路径问题
-    // 例如将 "/esm.sh/esm.sh/react/jsx-runtime" 替换为 "/esm.sh/react/jsx-runtime"
-    duplicatePathRegex := regexp.MustCompile(`from\s+["'](/` + apiDomain + `/` + apiDomain + `/([^"']+))["']`)
-    compiledCode = duplicatePathRegex.ReplaceAllString(compiledCode, `from "/` + apiDomain + `/$2"`)
-    
-    // 添加路径替换，处理相对路径引用
-    // 例如将 "/react-dom@19.1.0/es2022/react-dom.mjs" 替换为 "/esm.sh/react-dom@19.1.0/es2022/react-dom.mjs"
-    pathRegex := regexp.MustCompile(`from\s+["'](\/([@\w\d\.-]+)\/[^"']+)["']`)
-    if basePath != "" {
-        // 如果设置了basePath，添加前缀
-        compiledCode = pathRegex.ReplaceAllString(compiledCode, `from "` + basePath + `/` + apiDomain + `$1"`)
-    } else {
-        compiledCode = pathRegex.ReplaceAllString(compiledCode, `from "/` + apiDomain + `$1"`)
-    }
-    
-    // 处理没有from的裸导入语句 (例如 import "/dayjs@1.11.13/locale/zh-cn.js")
-    bareImportRegex := regexp.MustCompile(`import\s+["'](\/([@\w\d\.-]+)\/[^"']+)["'];`)
-    if basePath != "" {
-        // 如果设置了basePath，添加前缀
-        compiledCode = bareImportRegex.ReplaceAllString(compiledCode, `import "` + basePath + `/` + apiDomain + `$1";`)
-    } else {
-        compiledCode = bareImportRegex.ReplaceAllString(compiledCode, `import "/` + apiDomain + `$1";`)
-    }
+    // 使用processWrapperContent处理绝对路径导入
+    processedCode := processWrapperContent([]byte(compiledCode), apiDomain)
+    compiledCode = string(processedCode)
     
     // 替换本地相对路径引用的扩展名（.tsx/.ts/.jsx -> .js）
     localImportRegex := regexp.MustCompile(`from\s+["'](\.[^"']+)(\.tsx|\.ts|\.jsx)["']`)
