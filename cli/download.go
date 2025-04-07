@@ -1015,7 +1015,7 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     }
     
     // 查找模块中的深层依赖（在处理内容之前）
-    depPaths := findDeepDependencies(moduleContent)
+    depPaths := findDeepDependencies(moduleContent, normalizedPath)
     logger.Debug(LogCatDependency, "分析模块中的依赖: %s", url)
     if len(depPaths) > 0 {
         logger.Info(LogCatDependency, "✅ 共发现 %d 个依赖", len(depPaths))
@@ -1433,10 +1433,10 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
 }
 
 // 从模块内容中找出深层依赖
-func findDeepDependencies(content []byte) []string {
+func findDeepDependencies(content []byte, currentModulePath string) []string {
     // 提取形如 "/react-dom@19.0.0/es2022/react-dom.mjs" 的依赖路径
     // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
-    dependencyRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[^"']+)["']`)
+    dependencyRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["']((?:\/|\.[\.\/]).*?)["']`)
     matches := dependencyRegex.FindAllSubmatch(content, -1)
     
     var deps []string
@@ -1444,23 +1444,94 @@ func findDeepDependencies(content []byte) []string {
     
     // 添加日志：显示正在分析的内容长度
     logger.Debug(LogCatDependency, "正在分析模块内容，长度: %d 字节", len(content))
+    logger.Debug(LogCatDependency, "当前模块路径: %s", currentModulePath)
+    
+    // 当前模块的目录路径，用于解析相对路径
+    var currentDir string
+    if currentModulePath != "" {
+        // 去掉文件名部分，只保留目录
+        currentDir = filepath.Dir(currentModulePath)
+        if !strings.HasSuffix(currentDir, "/") {
+            currentDir = currentDir + "/"
+        }
+        logger.Debug(LogCatDependency, "当前模块目录: %s", currentDir)
+    }
     
     for _, match := range matches {
         if len(match) >= 2 {
-            dep := string(match[1])
+            depPath := string(match[1])
             
             // 处理可能的查询参数
-            if strings.Contains(dep, "?") {
-                pathParts := strings.SplitN(dep, "?", 2)
-                dep = pathParts[0] // 只使用问号前的路径部分
-                logger.Debug(LogCatDependency, "路径包含查询参数，提取基本路径: %s", dep)
+            var queryParams string
+            if strings.Contains(depPath, "?") {
+                pathParts := strings.SplitN(depPath, "?", 2)
+                depPath = pathParts[0] // 只使用问号前的路径部分
+                queryParams = "?" + pathParts[1]
+                logger.Debug(LogCatDependency, "路径包含查询参数，提取基本路径: %s, 查询参数: %s", depPath, queryParams)
             }
             
-            if !seen[dep] {
-                seen[dep] = true
-                deps = append(deps, dep)
+            // 处理相对路径
+            if strings.HasPrefix(depPath, "./") || strings.HasPrefix(depPath, "../") {
+                if currentDir != "" {
+                    // 解析相对路径为绝对路径
+                    var resolvedPath string
+                    
+                    // 简单处理 "./" 开头的路径
+                    if strings.HasPrefix(depPath, "./") {
+                        resolvedPath = currentDir + strings.TrimPrefix(depPath, "./")
+                    } else if strings.HasPrefix(depPath, "../") {
+                        // 处理 "../" 开头的路径（可能有多层）
+                        parts := strings.Split(currentDir, "/")
+                        // 移除最后一个空元素（如果有）
+                        if len(parts) > 0 && parts[len(parts)-1] == "" {
+                            parts = parts[:len(parts)-1]
+                        }
+                        
+                        relPath := depPath
+                        
+                        // 处理每个 "../"
+                        for strings.HasPrefix(relPath, "../") {
+                            if len(parts) > 1 {
+                                // 移除最后一个目录部分
+                                parts = parts[:len(parts)-1]
+                                relPath = strings.TrimPrefix(relPath, "../")
+                            } else {
+                                logger.Error(LogCatDependency, "相对路径超出根目录范围: %s", depPath)
+                                break
+                            }
+                        }
+                        
+                        // 构建新路径
+                        base := strings.Join(parts, "/")
+                        if base != "" && !strings.HasSuffix(base, "/") {
+                            base = base + "/"
+                        }
+                        resolvedPath = base + relPath
+                    }
+                    
+                    logger.Debug(LogCatDependency, "解析相对路径: %s -> %s", depPath, resolvedPath)
+                    depPath = resolvedPath
+                } else {
+                    logger.Error(LogCatDependency, "无法解析相对路径，当前模块路径为空: %s", depPath)
+                    continue
+                }
+            }
+            
+            // 确保路径以斜杠开头
+            if !strings.HasPrefix(depPath, "/") {
+                depPath = "/" + depPath
+            }
+            
+            // 重新添加查询参数
+            if queryParams != "" {
+                depPath = depPath + queryParams
+            }
+            
+            if !seen[depPath] {
+                seen[depPath] = true
+                deps = append(deps, depPath)
                 // 添加日志：每发现一个依赖就记录
-                logger.Debug(LogCatDependency, "🔍 发现依赖: %s", dep)
+                logger.Debug(LogCatDependency, "🔍 发现依赖: %s", depPath)
             }
         }
     }
