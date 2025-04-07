@@ -10,7 +10,107 @@ import (
     "regexp"
     "strings"
     "sync"
+    
+    "github.com/ije/gox/log"
 )
+
+// Logger 管理不同类别的日志
+type Logger struct {
+    logger *log.Logger
+    level  string
+    categories map[string]bool
+}
+
+// 日志类别常量
+const (
+    LogCatGeneral   = "general"   // 一般日志
+    LogCatNetwork   = "network"   // 网络请求日志
+    LogCatDependency = "deps"     // 依赖处理日志
+    LogCatCompile   = "compile"   // 编译相关日志
+    LogCatFS        = "fs"        // 文件系统操作日志
+)
+
+// 全局logger实例
+var logger *Logger
+
+// 初始化日志系统
+func initLogger(level string, enabledCategories []string) {
+    // 使用标准输出
+    // 此库只支持 "file:" 协议，我们使用os.Stdout作为输出
+    l, err := log.New("file:/dev/stdout")
+    
+    if err != nil {
+        fmt.Printf("初始化日志失败: %v\n", err)
+        return
+    }
+    
+    l.SetLevelByName(level)
+    
+    // 默认启用所有类别
+    categories := make(map[string]bool)
+    if len(enabledCategories) == 0 {
+        categories[LogCatGeneral] = true
+        categories[LogCatNetwork] = true
+        categories[LogCatDependency] = true
+        categories[LogCatCompile] = true
+        categories[LogCatFS] = true
+    } else {
+        // 只启用指定的类别
+        for _, cat := range enabledCategories {
+            categories[cat] = true
+        }
+    }
+    
+    logger = &Logger{
+        logger: l,
+        level: level,
+        categories: categories,
+    }
+}
+
+// 检查类别是否启用
+func (l *Logger) isEnabled(category string) bool {
+    if l == nil || l.categories == nil {
+        return true
+    }
+    return l.categories[category]
+}
+
+// 输出信息级别日志
+func (l *Logger) Info(category, format string, v ...interface{}) {
+    if l != nil && l.isEnabled(category) {
+        l.logger.Infof("[%s] %s", category, fmt.Sprintf(format, v...))
+    }
+}
+
+// 输出调试级别日志
+func (l *Logger) Debug(category, format string, v ...interface{}) {
+    if l != nil && l.isEnabled(category) {
+        l.logger.Debugf("[%s] %s", category, fmt.Sprintf(format, v...))
+    }
+}
+
+// 输出错误级别日志
+func (l *Logger) Error(category, format string, v ...interface{}) {
+    if l != nil && l.isEnabled(category) {
+        l.logger.Errorf("[%s] %s", category, fmt.Sprintf(format, v...))
+    }
+}
+
+// 设置启用的日志类别
+func (l *Logger) SetCategories(categories []string) {
+    if l == nil {
+        return
+    }
+    
+    // 重置所有类别
+    l.categories = make(map[string]bool)
+    
+    // 启用指定的类别
+    for _, cat := range categories {
+        l.categories[cat] = true
+    }
+}
 
 type DependencyInfo struct {
     Specifier string   `json:"specifier"`
@@ -39,7 +139,10 @@ func getAPIDomain() string {
 }
 
 func DownloadDependencies(args []string) error {
-    fmt.Println("开始执行下载命令...")
+    // 初始化日志
+    initLogger("info", nil) // 默认启用所有类别
+    
+    logger.Info(LogCatGeneral, "开始执行下载命令...")
     
     // 初始化全局模块映射
     globalModuleMap = make(map[string]string)
@@ -60,24 +163,27 @@ func DownloadDependencies(args []string) error {
     // 默认basePath为空
     basePath = ""
     
-    fmt.Printf("入口路径: %s\n", entryPath)
+    // 日志类别
+    logCategories := []string{LogCatGeneral, LogCatNetwork, LogCatDependency, LogCatCompile, LogCatFS}
+    
+    logger.Info(LogCatGeneral, "入口路径: %s", entryPath)
     
     // 从参数中获取输出目录和压缩选项
     for i := 1; i < len(args); i++ {
         if args[i] == "--out-dir" && i+1 < len(args) {
             outDir = args[i+1]
-            fmt.Printf("输出目录: %s\n", outDir)
+            logger.Info(LogCatGeneral, "输出目录: %s", outDir)
             i++
         } else if args[i] == "--minify" {
             minify = true
-            fmt.Println("启用代码压缩")
+            logger.Info(LogCatGeneral, "启用代码压缩")
         } else if args[i] == "--api-url" && i+1 < len(args) {
             apiBaseURL = args[i+1]
-            fmt.Printf("使用API基础URL: %s\n", apiBaseURL)
+            logger.Info(LogCatGeneral, "使用API基础URL: %s", apiBaseURL)
             i++
         } else if args[i] == "--deno-json" && i+1 < len(args) {
             denoJsonPath = args[i+1]
-            fmt.Printf("使用deno.json路径: %s\n", denoJsonPath)
+            logger.Info(LogCatGeneral, "使用deno.json路径: %s", denoJsonPath)
             i++
         } else if args[i] == "--base-path" && i+1 < len(args) {
             basePath = args[i+1]
@@ -88,7 +194,18 @@ func DownloadDependencies(args []string) error {
             if strings.HasSuffix(basePath, "/") {
                 basePath = basePath[:len(basePath)-1]
             }
-            fmt.Printf("使用基础路径: %s\n", basePath)
+            logger.Info(LogCatGeneral, "使用基础路径: %s", basePath)
+            i++
+        } else if args[i] == "--log-level" && i+1 < len(args) {
+            // 设置日志级别
+            initLogger(args[i+1], logCategories)
+            logger.Info(LogCatGeneral, "设置日志级别: %s", args[i+1])
+            i++
+        } else if args[i] == "--log-categories" && i+1 < len(args) {
+            // 设置日志类别
+            categories := strings.Split(args[i+1], ",")
+            logger.SetCategories(categories)
+            logger.Info(LogCatGeneral, "启用的日志类别: %s", args[i+1])
             i++
         }
     }
@@ -96,7 +213,7 @@ func DownloadDependencies(args []string) error {
     // 检查入口是文件还是目录
     fileInfo, err := os.Stat(entryPath)
     if err != nil {
-        fmt.Printf("获取入口信息失败: %v\n", err)
+        logger.Error(LogCatFS, "获取入口信息失败: %v", err)
         return fmt.Errorf("获取入口信息失败: %v", err)
     }
 
@@ -105,13 +222,13 @@ func DownloadDependencies(args []string) error {
     var indexHtmlPath string
     if fileInfo.IsDir() {
         // 如果是目录，尝试找到 index.html
-        fmt.Printf("%s 是目录，查找 index.html...\n", entryPath)
+        logger.Info(LogCatFS, "%s 是目录，查找 index.html...", entryPath)
         indexHtmlPath = filepath.Join(entryPath, "index.html")
         if _, err := os.Stat(indexHtmlPath); err != nil {
-            fmt.Printf("在目录 %s 中未找到 index.html: %v\n", entryPath, err)
+            logger.Error(LogCatFS, "在目录 %s 中未找到 index.html: %v", entryPath, err)
             return fmt.Errorf("在目录 %s 中未找到 index.html: %v", entryPath, err)
         }
-        fmt.Printf("找到入口文件: %s\n", indexHtmlPath)
+        logger.Info(LogCatFS, "找到入口文件: %s", indexHtmlPath)
         actualEntryPath = indexHtmlPath
     } else {
         // 直接使用文件
@@ -120,14 +237,14 @@ func DownloadDependencies(args []string) error {
     
     // 判断入口文件扩展名
     fileExt := filepath.Ext(actualEntryPath)
-    fmt.Printf("入口文件扩展名: %s\n", fileExt)
+    logger.Debug(LogCatFS, "入口文件扩展名: %s", fileExt)
     
     // 检查是否为前端源文件
     isFrontendSource := fileExt == ".tsx" || fileExt == ".ts" || fileExt == ".jsx" || fileExt == ".js"
     
     // 前端源文件需要指定deno.json
     if isFrontendSource && denoJsonPath == "" {
-        fmt.Printf("入口文件是前端源文件 (%s)，需要同时指定 deno.json 文件\n", fileExt)
+        logger.Error(LogCatGeneral, "入口文件是前端源文件 (%s)，需要同时指定 deno.json 文件", fileExt)
         return fmt.Errorf("入口文件是前端源文件 (%s)，需要同时使用 --deno-json 指定 deno.json 文件", fileExt)
     }
     
@@ -138,79 +255,79 @@ func DownloadDependencies(args []string) error {
     
     // 如果指定了deno.json文件路径，从deno.json读取importmap
     if denoJsonPath != "" {
-        fmt.Printf("使用指定的deno.json文件: %s\n", denoJsonPath)
+        logger.Info(LogCatFS, "使用指定的deno.json文件: %s", denoJsonPath)
         
         // 读取deno.json文件
         denoJsonContent, err := os.ReadFile(denoJsonPath)
         if err != nil {
-            fmt.Printf("读取deno.json文件失败: %v\n", err)
+            logger.Error(LogCatFS, "读取deno.json文件失败: %v", err)
             return fmt.Errorf("读取deno.json文件失败: %v", err)
         }
         
         // 解析deno.json内容
         if err := json.Unmarshal(denoJsonContent, &importMapData); err != nil {
-            fmt.Printf("解析deno.json内容失败: %v\n", err)
+            logger.Error(LogCatGeneral, "解析deno.json内容失败: %v", err)
             return fmt.Errorf("解析deno.json内容失败: %v", err)
         }
         
         if importMapData.Imports == nil {
-            fmt.Println("deno.json不包含有效的imports字段")
+            logger.Error(LogCatGeneral, "deno.json不包含有效的imports字段")
             return fmt.Errorf("deno.json不包含有效的imports字段")
         }
         
-        fmt.Printf("从deno.json解析到的importmap: %v\n", importMapData.Imports)
+        logger.Debug(LogCatDependency, "从deno.json解析到的importmap: %v", importMapData.Imports)
         
         // 自动添加常用的React相关子模块
         addReactJsxRuntime(&importMapData)
     } else {
         // 从HTML中解析importmap
         // 如果是HTML文件，从中解析importmap
-        fmt.Printf("入口文件是HTML文件，从中解析importmap\n")
+        logger.Info(LogCatGeneral, "入口文件是HTML文件，从中解析importmap")
         
         // 读取入口文件
-        fmt.Printf("正在读取入口文件: %s\n", actualEntryPath)
+        logger.Debug(LogCatFS, "正在读取入口文件: %s", actualEntryPath)
         entryContent, err = os.ReadFile(actualEntryPath)
         if err != nil {
-            fmt.Printf("读取入口文件失败: %v\n", err)
+            logger.Error(LogCatFS, "读取入口文件失败: %v", err)
             return fmt.Errorf("读取入口文件失败: %v", err)
         }
-        fmt.Println("入口文件读取成功")
+        logger.Debug(LogCatFS, "入口文件读取成功")
         
         // 解析 importmap
-        fmt.Println("正在解析 importmap...")
+        logger.Info(LogCatDependency, "正在解析 importmap...")
         
         // 使用正则表达式从 HTML 中提取 importmap
         importMapRegex := regexp.MustCompile(`<script\s+type="importmap"\s*>([\s\S]*?)<\/script>`)
         matches := importMapRegex.FindSubmatch(entryContent)
         
         if len(matches) < 2 {
-            fmt.Println("未在入口文件中找到 importmap")
+            logger.Error(LogCatDependency, "未在入口文件中找到 importmap")
             return fmt.Errorf("未在入口文件中找到 importmap")
         }
         
         importMapJson := matches[1]
-        fmt.Printf("找到 importmap: %s\n", string(importMapJson))
+        logger.Debug(LogCatDependency, "找到 importmap: %s", string(importMapJson))
         
         if err := json.Unmarshal(importMapJson, &importMapData); err != nil {
-            fmt.Printf("解析 importmap 失败: %v\n", err)
+            logger.Error(LogCatDependency, "解析 importmap 失败: %v", err)
             return fmt.Errorf("解析 importmap 失败: %v", err)
         }
         
         if importMapData.Imports == nil {
-            fmt.Println("importmap 不包含有效的 imports 字段")
+            logger.Error(LogCatDependency, "importmap 不包含有效的 imports 字段")
             return fmt.Errorf("importmap 不包含有效的 imports 字段")
         }
         
-        fmt.Printf("解析到的 importmap: %v\n", importMapData.Imports)
+        logger.Debug(LogCatDependency, "解析到的 importmap: %v", importMapData.Imports)
         
         // 自动添加常用的React相关子模块
         addReactJsxRuntime(&importMapData)
     }
 
     // 3. 创建输出目录
-    fmt.Printf("正在创建输出目录: %s\n", outDir)
+    logger.Info(LogCatFS, "正在创建输出目录: %s", outDir)
     if err := os.MkdirAll(outDir, 0755); err != nil {
-        fmt.Printf("创建输出目录失败: %v\n", err)
+        logger.Error(LogCatFS, "创建输出目录失败: %v", err)
         return fmt.Errorf("创建输出目录失败: %v", err)
     }
     
@@ -220,12 +337,12 @@ func DownloadDependencies(args []string) error {
     // 创建目录
     esmDir := filepath.Join(outDir, apiDomain)
     if err := os.MkdirAll(esmDir, 0755); err != nil {
-        fmt.Printf("创建 %s 目录失败: %v\n", apiDomain, err)
+        logger.Error(LogCatFS, "创建 %s 目录失败: %v", apiDomain, err)
         return fmt.Errorf("创建 %s 目录失败: %v", apiDomain, err)
     }
 
     // 4. 使用并发下载所有依赖
-    fmt.Printf("开始下载依赖，共 %d 个\n", len(importMapData.Imports))
+    logger.Info(LogCatDependency, "开始下载依赖，共 %d 个", len(importMapData.Imports))
     var wg sync.WaitGroup
     errChan := make(chan error, len(importMapData.Imports))
     semaphore := make(chan struct{}, 5) // 限制并发数
@@ -235,13 +352,13 @@ func DownloadDependencies(args []string) error {
 
     // 下载所有依赖
     for spec, url := range importMapData.Imports {
-        fmt.Printf("准备下载依赖: %s -> %s\n", spec, url)
+        logger.Debug(LogCatDependency, "准备下载依赖: %s -> %s", spec, url)
         wg.Add(1)
         go downloadAndProcessModule(spec, url, outDir, &wg, semaphore, errChan, moduleMap)
     }
 
     // 等待所有下载完成
-    fmt.Println("等待所有下载完成...")
+    logger.Info(LogCatDependency, "等待所有下载完成...")
     wg.Wait()
     close(errChan)
 
@@ -252,9 +369,9 @@ func DownloadDependencies(args []string) error {
     }
 
     if len(errors) > 0 {
-        fmt.Println("下载过程中出现错误:")
+        logger.Error(LogCatGeneral, "下载过程中出现错误:")
         for _, err := range errors {
-            fmt.Println(err)
+            logger.Error(LogCatGeneral, "%s", err)
         }
         return fmt.Errorf("下载过程中出现错误:\n%s", strings.Join(errors, "\n"))
     }
@@ -262,41 +379,41 @@ func DownloadDependencies(args []string) error {
     // 5. 复制项目文件到输出目录
     if fileInfo.IsDir() {
         // 如果入口是目录，需要复制整个目录
-        fmt.Printf("正在复制项目文件到输出目录...\n")
+        logger.Info(LogCatFS, "正在复制项目文件到输出目录...")
         err = copyDir(entryPath, outDir)
         if err != nil {
-            fmt.Printf("复制项目文件失败: %v\n", err)
+            logger.Error(LogCatFS, "复制项目文件失败: %v", err)
             return fmt.Errorf("复制项目文件失败: %v", err)
         }
     } else {
         // 检查是否为前端源文件
         if isFrontendSource {
             // 如果是前端源文件，直接编译该文件
-            fmt.Printf("入口文件是前端源文件，直接编译处理: %s\n", actualEntryPath)
+            logger.Info(LogCatCompile, "入口文件是前端源文件，直接编译处理: %s", actualEntryPath)
             
             // 获取源文件的相对路径
             relPath := filepath.Base(actualEntryPath)
             
             // 编译应用文件
             if err := compileAppFilesWithPath(actualEntryPath, relPath, outDir); err != nil {
-                fmt.Printf("编译前端源文件失败: %v\n", err)
+                logger.Error(LogCatCompile, "编译前端源文件失败: %v", err)
                 return fmt.Errorf("编译前端源文件失败: %v", err)
             }
             
-            fmt.Printf("前端源文件编译完成: %s\n", actualEntryPath)
+            logger.Info(LogCatCompile, "前端源文件编译完成: %s", actualEntryPath)
         } else {
             // 如果是单个HTML文件，复制这个文件
-            fmt.Printf("正在复制入口文件到输出目录: %s\n", entryPath)
+            logger.Info(LogCatFS, "正在复制入口文件到输出目录: %s", entryPath)
             targetPath := filepath.Join(outDir, filepath.Base(entryPath))
             if err := os.WriteFile(targetPath, entryContent, 0644); err != nil {
-                fmt.Printf("保存入口文件失败: %v\n", err)
+                logger.Error(LogCatFS, "保存入口文件失败: %v", err)
                 return fmt.Errorf("保存入口文件失败: %v", err)
             }
         }
     }
 
     // 6. 生成本地 importmap
-    fmt.Println("生成本地 importmap...")
+    logger.Info(LogCatDependency, "生成本地 importmap...")
     
     // 如果设置了basePath，则修改路径
     localModuleMap := make(map[string]string)
@@ -316,24 +433,24 @@ func DownloadDependencies(args []string) error {
     
     importMapContent, err := json.MarshalIndent(localImportMap, "", "  ")
     if err != nil {
-        fmt.Printf("生成本地 importmap 失败: %v\n", err)
+        logger.Error(LogCatDependency, "生成本地 importmap 失败: %v", err)
         return fmt.Errorf("生成本地 importmap 失败: %v", err)
     }
     
     if err := os.WriteFile(filepath.Join(outDir, "importmap.json"), importMapContent, 0644); err != nil {
-        fmt.Printf("保存本地 importmap 失败: %v\n", err)
+        logger.Error(LogCatFS, "保存本地 importmap 失败: %v", err)
         return fmt.Errorf("保存本地 importmap 失败: %v", err)
     }
     
     // 7. 修改输出目录中的 index.html (如果存在)
     outputIndexPath := filepath.Join(outDir, "index.html")
     if _, err := os.Stat(outputIndexPath); err == nil && !isFrontendSource {
-        fmt.Println("修改输出目录中的 index.html...")
+        logger.Info(LogCatFS, "修改输出目录中的 index.html...")
         
         // 读取输出目录中的 index.html
         outputIndexContent, err := os.ReadFile(outputIndexPath)
         if err != nil {
-            fmt.Printf("读取输出目录中的 index.html 失败: %v\n", err)
+            logger.Error(LogCatFS, "读取输出目录中的 index.html 失败: %v", err)
             return fmt.Errorf("读取输出目录中的 index.html 失败: %v", err)
         }
         
@@ -349,13 +466,13 @@ func DownloadDependencies(args []string) error {
         }
         
         // 8. 处理应用文件 - 查找并处理所有需要编译的本地文件
-        fmt.Println("处理应用文件...")
+        logger.Info(LogCatCompile, "处理应用文件...")
         
         // 找到所有需要编译的文件
         scriptRegex := regexp.MustCompile(`<script\s+[^>]*src="https://esm\.(sh|d8d\.fun)/x"[^>]*href="([^"]+)"[^>]*>(?:</script>)?`)
         scriptMatches := scriptRegex.FindAllSubmatch(localHTML, -1)
         
-        fmt.Printf("发现 %d 个应用入口文件\n", len(scriptMatches))
+        logger.Info(LogCatCompile, "发现 %d 个应用入口文件", len(scriptMatches))
         
         for _, match := range scriptMatches {
             if len(match) < 3 {
@@ -364,22 +481,22 @@ func DownloadDependencies(args []string) error {
             
             // 获取相对路径
             relPath := string(match[2])
-            fmt.Printf("发现入口文件: %s\n", relPath)
+            logger.Debug(LogCatCompile, "发现入口文件: %s", relPath)
             
             // 使用入口的完整路径
             fullPath := filepath.Join(filepath.Dir(indexHtmlPath), relPath)
-            fmt.Printf("使用源文件的完整路径: %s\n", fullPath)
+            logger.Debug(LogCatCompile, "使用源文件的完整路径: %s", fullPath)
             
             // 编译前检查路径
             if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-                fmt.Printf("警告: 源文件不存在: %s\n", fullPath)
+                logger.Error(LogCatFS, "警告: 源文件不存在: %s", fullPath)
                 return fmt.Errorf("源文件不存在: %s", fullPath)
             }
             
             // 修改compileAppFiles调用，传入入口文件的完整路径和相对路径
             err = compileAppFilesWithPath(fullPath, relPath, outDir)
             if err != nil {
-                fmt.Printf("编译应用文件失败: %v\n", err)
+                logger.Error(LogCatCompile, "编译应用文件失败: %v", err)
                 return fmt.Errorf("编译应用文件失败: %v", err)
             }
             
@@ -399,12 +516,12 @@ func DownloadDependencies(args []string) error {
         }
         
         if err := os.WriteFile(outputIndexPath, localHTML, 0644); err != nil {
-            fmt.Printf("保存修改后的 index.html 失败: %v\n", err)
+            logger.Error(LogCatFS, "保存修改后的 index.html 失败: %v", err)
             return fmt.Errorf("保存修改后的 index.html 失败: %v", err)
         }
     }
 
-    fmt.Printf("下载完成！所有文件已保存到 %s 目录\n", outDir)
+    logger.Info(LogCatGeneral, "下载完成！所有文件已保存到 %s 目录", outDir)
     return nil
 }
 
@@ -418,8 +535,10 @@ func fetchContent(url string) ([]byte, error) {
     }
     
     // 1. 获取文件内容
+    logger.Debug(LogCatNetwork, "发送HTTP请求: %s", url)
     resp, err := client.Get(url)
     if err != nil {
+        logger.Error(LogCatNetwork, "HTTP请求失败: %v", err)
         return nil, err
     }
     defer resp.Body.Close()
@@ -429,18 +548,27 @@ func fetchContent(url string) ([]byte, error) {
        resp.StatusCode == http.StatusTemporaryRedirect || resp.StatusCode == http.StatusPermanentRedirect {
         redirectURL, err := resp.Location()
         if err != nil {
+            logger.Error(LogCatNetwork, "获取重定向URL失败: %v", err)
             return nil, fmt.Errorf("获取重定向URL失败: %v", err)
         }
-        fmt.Printf("发现重定向: %s -> %s\n", url, redirectURL.String())
+        logger.Debug(LogCatNetwork, "发现重定向: %s -> %s", url, redirectURL.String())
         return fetchContent(redirectURL.String())
     }
     
     if resp.StatusCode != http.StatusOK {
         body, _ := io.ReadAll(resp.Body)
+        logger.Error(LogCatNetwork, "HTTP 错误: %d %s - %s", resp.StatusCode, resp.Status, string(body))
         return nil, fmt.Errorf("HTTP 错误: %d %s - %s", resp.StatusCode, resp.Status, string(body))
     }
     
-    return io.ReadAll(resp.Body)
+    content, err := io.ReadAll(resp.Body)
+    if err != nil {
+        logger.Error(LogCatNetwork, "读取响应内容失败: %v", err)
+        return nil, err
+    }
+    
+    logger.Debug(LogCatNetwork, "成功获取内容，大小: %d 字节", len(content))
+    return content, nil
 }
 
 // 复制目录
@@ -448,17 +576,20 @@ func copyDir(src, dst string) error {
     // 获取源目录信息
     srcInfo, err := os.Stat(src)
     if err != nil {
+        logger.Error(LogCatFS, "获取源目录信息失败: %v", err)
         return err
     }
     
     // 创建目标目录
     if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+        logger.Error(LogCatFS, "创建目标目录失败: %v", err)
         return err
     }
     
     // 读取源目录内容
     entries, err := os.ReadDir(src)
     if err != nil {
+        logger.Error(LogCatFS, "读取源目录内容失败: %v", err)
         return err
     }
     
@@ -472,7 +603,7 @@ func copyDir(src, dst string) error {
         
         // 如果与API域名匹配，跳过（该目录将由下载过程创建）
         if entry.Name() == apiDomain || entry.Name() == "esm.sh" {
-            fmt.Printf("跳过API目录: %s\n", entry.Name())
+            logger.Debug(LogCatFS, "跳过API目录: %s", entry.Name())
             continue
         }
         
@@ -480,7 +611,7 @@ func copyDir(src, dst string) error {
         if !entry.IsDir() {
             ext := filepath.Ext(entry.Name())
             if ext == ".tsx" || ext == ".ts" || ext == ".jsx" {
-                fmt.Printf("跳过源文件: %s\n", srcPath)
+                logger.Debug(LogCatFS, "跳过源文件: %s", srcPath)
                 continue
             }
         }
@@ -503,9 +634,12 @@ func copyDir(src, dst string) error {
 
 // 复制文件
 func copyFile(src, dst string) error {
+    logger.Debug(LogCatFS, "复制文件: %s -> %s", src, dst)
+    
     // 打开源文件
     srcFile, err := os.Open(src)
     if err != nil {
+        logger.Error(LogCatFS, "打开源文件失败: %v", err)
         return err
     }
     defer srcFile.Close()
@@ -513,6 +647,7 @@ func copyFile(src, dst string) error {
     // 创建目标文件
     dstFile, err := os.Create(dst)
     if err != nil {
+        logger.Error(LogCatFS, "创建目标文件失败: %v", err)
         return err
     }
     defer dstFile.Close()
@@ -520,12 +655,14 @@ func copyFile(src, dst string) error {
     // 复制内容
     _, err = io.Copy(dstFile, srcFile)
     if err != nil {
+        logger.Error(LogCatFS, "复制文件内容失败: %v", err)
         return err
     }
     
     // 获取源文件权限
     srcInfo, err := os.Stat(src)
     if err != nil {
+        logger.Error(LogCatFS, "获取源文件信息失败: %v", err)
         return err
     }
     
@@ -540,6 +677,7 @@ func compileFile(content string, filename string) (string, error) {
     
     // 对于CSS文件，直接返回原内容，不进行编译
     if fileExt == ".css" {
+        logger.Debug(LogCatCompile, "CSS文件不需要编译: %s", filename)
         return content, nil
     }
     
@@ -555,8 +693,11 @@ func compileFile(content string, filename string) (string, error) {
     case ".js":
         lang = "js"
     default:
+        logger.Error(LogCatCompile, "不支持的文件类型: %s", fileExt)
         return "", fmt.Errorf("不支持的文件类型: %s", fileExt)
     }
+    
+    logger.Debug(LogCatCompile, "编译文件 %s，类型: %s", filename, lang)
     
     // 提取域名部分，用于后续处理
     apiDomain := strings.TrimPrefix(strings.TrimPrefix(apiBaseURL, "https://"), "http://")
@@ -565,19 +706,13 @@ func compileFile(content string, filename string) (string, error) {
     customImportMap := make(map[string]string)
     for moduleName, localPath := range globalModuleMap {
         customImportMap[moduleName] = localPath
-        
-        // 添加常见的子模块映射
-        // if moduleName == "react" {
-        //     customImportMap["react/jsx-runtime"] = "/" + apiDomain + "/react/jsx-runtime"
-        // } else if moduleName == "react-dom" {
-        //     customImportMap["react-dom/client"] = "/" + apiDomain + "/react-dom/client"
-        // }
     }
     
     importMapBytes, err := json.Marshal(map[string]map[string]string{
         "imports": customImportMap,
     })
     if err != nil {
+        logger.Error(LogCatCompile, "创建 importmap 失败: %v", err)
         return "", fmt.Errorf("创建 importmap 失败: %v", err)
     }
     
@@ -607,18 +742,22 @@ func compileFile(content string, filename string) (string, error) {
     // 序列化请求
     reqBody, err := json.Marshal(transformRequest)
     if err != nil {
+        logger.Error(LogCatCompile, "序列化请求失败: %v", err)
         return "", fmt.Errorf("序列化请求失败: %v", err)
     }
     
     // 发送请求
+    logger.Debug(LogCatNetwork, "发送编译请求: %s/transform", apiBaseURL)
     resp, err := http.Post(apiBaseURL + "/transform", "application/json", strings.NewReader(string(reqBody)))
     if err != nil {
+        logger.Error(LogCatNetwork, "发送编译请求失败: %v", err)
         return "", fmt.Errorf("发送请求失败: %v", err)
     }
     defer resp.Body.Close()
     
     if resp.StatusCode != http.StatusOK {
         body, _ := io.ReadAll(resp.Body)
+        logger.Error(LogCatNetwork, "编译请求失败: %d %s - %s", resp.StatusCode, resp.Status, string(body))
         return "", fmt.Errorf("请求失败: %d %s - %s", resp.StatusCode, resp.Status, string(body))
     }
     
@@ -629,8 +768,11 @@ func compileFile(content string, filename string) (string, error) {
     }
     
     if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        logger.Error(LogCatCompile, "解析编译响应失败: %v", err)
         return "", fmt.Errorf("解析响应失败: %v", err)
     }
+    
+    logger.Debug(LogCatCompile, "编译成功，处理编译后代码")
     
     // 进一步处理编译后的代码，将引用替换为本地路径
     compiledCode := result.Code
@@ -663,6 +805,7 @@ func compileFile(content string, filename string) (string, error) {
     localImportRegex := regexp.MustCompile(`from\s+["'](\.[^"']+)(\.tsx|\.ts|\.jsx)["']`)
     compiledCode = localImportRegex.ReplaceAllString(compiledCode, `from "$1.js"`)
     
+    logger.Debug(LogCatCompile, "编译文件处理完成: %s", filename)
     return compiledCode, nil
 }
 
@@ -679,14 +822,14 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         defer func() { <-semaphore }()
     }
 
-    fmt.Printf("开始处理模块: %s\n", url)
+    logger.Debug(LogCatDependency, "开始处理模块: %s", url)
     
     // 检查是否已下载过此模块
     downloadedModulesMutex.Lock()
     alreadyDownloaded := downloadedModules[url]
     downloadedModulesMutex.Unlock()
     if alreadyDownloaded {
-        fmt.Printf("模块已下载过，跳过: %s\n", url)
+        logger.Debug(LogCatDependency, "模块已下载过，跳过: %s", url)
         return
     }
     
@@ -714,7 +857,7 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         }
     }
     
-    fmt.Printf("从URL中提取的模块路径: %s\n", modulePath)
+    logger.Debug(LogCatDependency, "从URL中提取的模块路径: %s", modulePath)
     
     // 提取域名部分，用于后续处理
     apiDomain := getAPIDomain()
@@ -741,7 +884,7 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
             parts := strings.Split(modulePath, apiDomain)
             if len(parts) > 1 {
                 modulePath = parts[len(parts)-1]
-                fmt.Printf("检测到路径中有重复的域名，修正为: %s\n", modulePath)
+                logger.Debug(LogCatDependency, "检测到路径中有重复的域名，修正为: %s", modulePath)
                 moduleBase = filepath.Dir(modulePath)
                 filename = filepath.Base(modulePath)
             }
@@ -751,7 +894,7 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     
     // 创建模块目录
     if err := os.MkdirAll(filepath.Dir(moduleSavePath), 0755); err != nil {
-        fmt.Printf("创建模块目录失败: %v\n", err)
+        logger.Error(LogCatFS, "创建模块目录失败: %v", err)
         if errChan != nil {
             errChan <- fmt.Errorf("创建模块目录失败: %v", err)
         }
@@ -759,10 +902,10 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     }
     
     // 下载模块内容
-    fmt.Printf("下载模块: %s，保存到: %s\n", url, moduleSavePath)
+    logger.Info(LogCatNetwork, "下载模块: %s，保存到: %s", url, moduleSavePath)
     moduleContent, err := fetchContent(url)
     if err != nil {
-        fmt.Printf("下载模块失败: %v\n", err)
+        logger.Error(LogCatNetwork, "下载模块失败: %v", err)
         if errChan != nil {
             errChan <- fmt.Errorf("下载模块失败: %v", err)
         }
@@ -770,33 +913,26 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     }
     
     // 处理模块内容中的路径
-    fmt.Printf("处理模块内容中的依赖路径: %s\n", url)
+    logger.Debug(LogCatDependency, "处理模块内容中的依赖路径: %s", url)
     processedContent := processWrapperContent(moduleContent, apiDomain)
     
     // 仅在处理前后内容一样时才显示日志
     if string(moduleContent) == string(processedContent) {
-        fmt.Println("检测到内容未发生变化")
-        // 显示处理前的内容头100字节
+        logger.Debug(LogCatDependency, "检测到内容未发生变化")
+        // 显示处理前的内容头100字节（仅调试级别）
         if len(moduleContent) > 100 {
-            fmt.Printf("处理前的内容头100字节: %s\n", string(moduleContent[:100]))
+            logger.Debug(LogCatDependency, "处理前的内容头100字节: %s", string(moduleContent[:100]))
         } else {
-            fmt.Printf("处理前的内容: %s\n", string(moduleContent))
-        }
-        
-        // 显示处理后的内容头100字节
-        if len(processedContent) > 100 {
-            fmt.Printf("处理后的内容头100字节: %s\n", string(processedContent[:100]))
-        } else {
-            fmt.Printf("处理后的内容: %s\n", string(processedContent))
+            logger.Debug(LogCatDependency, "处理前的内容: %s", string(moduleContent))
         }
     } else {
-        fmt.Println("内容已发生变化，跳过显示")
+        logger.Debug(LogCatDependency, "内容已发生变化")
     }
-    fmt.Printf("处理模块内容中的依赖路径完成: %s\n", url)
+    logger.Debug(LogCatDependency, "处理模块内容中的依赖路径完成: %s", url)
     
     // 保存处理后的模块
     if err := os.WriteFile(moduleSavePath, processedContent, 0644); err != nil {
-        fmt.Printf("保存模块失败: %v\n", err)
+        logger.Error(LogCatFS, "保存模块失败: %v", err)
         if errChan != nil {
             errChan <- fmt.Errorf("保存模块失败: %v", err)
         }
@@ -805,11 +941,11 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     
     // 查找模块中的深层依赖（在处理内容之前）
     depPaths := findDeepDependencies(moduleContent)
-    fmt.Printf("分析模块中的依赖: %s\n", url)
+    logger.Debug(LogCatDependency, "分析模块中的依赖: %s", url)
     if len(depPaths) > 0 {
-        fmt.Printf("✅ 共发现 %d 个依赖\n", len(depPaths))
+        logger.Info(LogCatDependency, "✅ 共发现 %d 个依赖", len(depPaths))
     } else {
-        fmt.Printf("⚠️ 未发现任何依赖\n")
+        logger.Debug(LogCatDependency, "⚠️ 未发现任何依赖")
     }
     
     
@@ -840,13 +976,13 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
         alreadyDownloaded := downloadedModules[depUrl]
         downloadedModulesMutex.Unlock()
         if !alreadyDownloaded {
-            fmt.Printf("🚀 开始递归下载依赖: %s\n", depUrl)
+            logger.Info(LogCatDependency, "🚀 开始递归下载依赖: %s", depUrl)
             if wg != nil {
                 wg.Add(1)
             }
             go downloadAndProcessModule("", depUrl, outDir, wg, semaphore, errChan, localModuleMap)
         } else {
-            fmt.Printf("⏩ 跳过已下载的依赖: %s\n", depUrl)
+            logger.Debug(LogCatDependency, "⏩ 跳过已下载的依赖: %s", depUrl)
         }
     }
     
@@ -859,18 +995,18 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
             alreadyDownloaded := downloadedModules[depURL]
             downloadedModulesMutex.Unlock()
             if depURL != "" && !alreadyDownloaded {
-                fmt.Printf("📦 递归下载裸依赖: %s -> %s\n", imp, depURL)
+                logger.Info(LogCatDependency, "📦 递归下载裸依赖: %s -> %s", imp, depURL)
                 if wg != nil {
                     wg.Add(1)
                 }
                 go downloadAndProcessModule("", depURL, outDir, wg, semaphore, errChan, localModuleMap)
             } else if depURL != "" {
-                fmt.Printf("⏩ 跳过已下载的裸依赖: %s\n", depURL)
+                logger.Debug(LogCatDependency, "⏩ 跳过已下载的裸依赖: %s", depURL)
             }
         }
     }
     
-    fmt.Printf("模块处理完成: %s\n", url)
+    logger.Debug(LogCatDependency, "模块处理完成: %s", url)
 }
 
 // 判断是否为本地路径
@@ -951,7 +1087,7 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
     // 使用队列处理所有需要编译的文件
     queue := []string{relPath}
     
-    fmt.Printf("源文件根目录: %s\n", baseDir)
+    logger.Debug(LogCatFS, "源文件根目录: %s", baseDir)
     
     for len(queue) > 0 {
         // 取出队列中的第一个文件
@@ -968,7 +1104,7 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
         // 如果当前处理的是入口文件，直接使用提供的完整路径
         if currentFile == relPath {
             srcPath = fullPath
-            fmt.Printf("使用入口文件的完整路径: %s\n", srcPath)
+            logger.Debug(LogCatFS, "使用入口文件的完整路径: %s", srcPath)
         } else {
             // 对于其他文件，计算相对于baseDir的路径
             // 去掉前缀的./以避免路径计算错误
@@ -982,7 +1118,7 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
                 srcPath = filepath.Join(baseDir, cleanCurrentFile)
             }
             
-            fmt.Printf("计算依赖文件路径: %s\n", srcPath)
+            logger.Debug(LogCatFS, "计算依赖文件路径: %s", srcPath)
         }
         
         // 检查文件是否存在
@@ -992,7 +1128,7 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
             altPath := filepath.Join(filepath.Dir(baseDir), cleanCurrentFile)
             if _, err := os.Stat(altPath); err == nil {
                 srcPath = altPath
-                fmt.Printf("使用替代路径: %s\n", srcPath)
+                logger.Debug(LogCatFS, "使用替代路径: %s", srcPath)
             } else {
                 return fmt.Errorf("找不到源文件: %s", srcPath)
             }
@@ -1000,7 +1136,7 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
         
         // 编译后的文件保存在输出目录
         outputPath := filepath.Join(outDir, strings.TrimSuffix(currentFile, filepath.Ext(currentFile)) + ".js")
-        fmt.Printf("编译文件: %s -> %s\n", srcPath, outputPath)
+        logger.Debug(LogCatFS, "编译文件: %s -> %s", srcPath, outputPath)
         
         // 确保输出目录存在
         if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
@@ -1019,7 +1155,7 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
             
             // 标记为已处理
             compiledFiles[currentFile] = true
-            fmt.Printf("复制非模块文件: %s -> %s\n", srcPath, filepath.Join(outDir, currentFile))
+            logger.Debug(LogCatFS, "复制非模块文件: %s -> %s", srcPath, filepath.Join(outDir, currentFile))
             continue
         }
         
@@ -1049,13 +1185,13 @@ func compileAppFilesWithPath(fullPath, relPath, outDir string) error {
             // 解析导入路径
             importDir := filepath.Dir(currentFile)
             resolvedPath := resolveImportPath(baseDir, imp)
-            fmt.Printf("发现本地依赖: 从 %s 导入 %s -> 解析为 %s\n", importDir, imp, resolvedPath)
+            logger.Debug(LogCatFS, "发现本地依赖: 从 %s 导入 %s -> 解析为 %s", importDir, imp, resolvedPath)
             
             // 优先检查当前目录的相对路径
             relativeToCurrentFile := filepath.Join(filepath.Dir(srcPath), strings.TrimPrefix(imp, "./"))
             if _, err := os.Stat(relativeToCurrentFile); err == nil {
                 resolvedPath = filepath.Clean(filepath.Join(filepath.Dir(currentFile), strings.TrimPrefix(imp, "./")))
-                fmt.Printf("使用相对当前文件的路径: %s\n", resolvedPath)
+                logger.Debug(LogCatFS, "使用相对当前文件的路径: %s", resolvedPath)
             }
             
             // 添加到队列
@@ -1078,7 +1214,7 @@ func findLocalImports(content string) []string {
     for _, match := range matches {
         if len(match) > 1 {
             importPath := match[1]
-            fmt.Printf("原始导入路径: %s\n", importPath)
+            logger.Debug(LogCatFS, "原始导入路径: %s", importPath)
             
             // 处理可能的路径分隔符不一致问题
             importPath = filepath.FromSlash(importPath)
@@ -1130,7 +1266,7 @@ func addReactSubmodule(data *struct{ Imports map[string]string `json:"imports"` 
     // 检查是否存在基础模块
     baseUrl, baseExists := data.Imports[baseModule]
     if !baseExists {
-        fmt.Printf("未找到%s模块，不添加%s/%s子模块\n", baseModule, baseModule, subModule)
+        logger.Debug(LogCatFS, "未找到%s模块，不添加%s/%s子模块", baseModule, baseModule, subModule)
         return
     }
     
@@ -1139,7 +1275,7 @@ func addReactSubmodule(data *struct{ Imports map[string]string `json:"imports"` 
     
     // 检查是否已经包含子模块
     if _, exists := data.Imports[fullSubModuleName]; !exists {
-        fmt.Printf("自动添加%s子模块\n", fullSubModuleName)
+        logger.Debug(LogCatFS, "自动添加%s子模块", fullSubModuleName)
         
         // 从基础URL中提取版本信息
         versionRegex := regexp.MustCompile(baseModule + `@([\d\.]+)`)
@@ -1148,20 +1284,20 @@ func addReactSubmodule(data *struct{ Imports map[string]string `json:"imports"` 
         var version string
         if len(matches) > 1 {
             version = matches[1]
-            fmt.Printf("检测到%s版本: %s\n", baseModule, version)
+            logger.Debug(LogCatFS, "检测到%s版本: %s", baseModule, version)
             
             // 根据版本构造子模块URL
             subModuleUrl := strings.Replace(baseUrl, baseModule+"@"+version, baseModule+"@"+version+"/"+subModule, 1)
             data.Imports[fullSubModuleName] = subModuleUrl
-            fmt.Printf("添加%s模块: %s\n", fullSubModuleName, subModuleUrl)
+            logger.Debug(LogCatFS, "添加%s模块: %s", fullSubModuleName, subModuleUrl)
         } else {
             // 如果无法确定版本，使用与基础模块相同的URL结构
-            fmt.Printf("无法从URL确定%s版本，使用与%s相同的URL结构\n", baseModule, baseModule)
+            logger.Debug(LogCatFS, "无法从URL确定%s版本，使用与%s相同的URL结构", baseModule, baseModule)
             
             // 构造子模块URL，替换路径部分
             subModuleUrl := strings.Replace(baseUrl, baseModule, baseModule+"/"+subModule, 1)
             data.Imports[fullSubModuleName] = subModuleUrl
-            fmt.Printf("添加%s模块: %s\n", fullSubModuleName, subModuleUrl)
+            logger.Debug(LogCatFS, "添加%s模块: %s", fullSubModuleName, subModuleUrl)
         }
     }
 }
@@ -1214,7 +1350,6 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
 func findDeepDependencies(content []byte) []string {
     // 提取形如 "/react-dom@19.0.0/es2022/react-dom.mjs" 的依赖路径
     // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
-    // dependencyRegex := regexp.MustCompile(`(?:import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[@\w\d\.\-]+\/[^"']+)["']`)
     dependencyRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["'](\/[@\w\d\.\-]+\/[^"']+)["']`)
     matches := dependencyRegex.FindAllSubmatch(content, -1)
     
@@ -1222,7 +1357,7 @@ func findDeepDependencies(content []byte) []string {
     seen := make(map[string]bool)
     
     // 添加日志：显示正在分析的内容长度
-    fmt.Printf("正在分析模块内容，长度: %d 字节\n", len(content))
+    logger.Debug(LogCatDependency, "正在分析模块内容，长度: %d 字节", len(content))
     
     for _, match := range matches {
         if len(match) >= 2 {
@@ -1231,11 +1366,28 @@ func findDeepDependencies(content []byte) []string {
                 seen[dep] = true
                 deps = append(deps, dep)
                 // 添加日志：每发现一个依赖就记录
-                fmt.Printf("🔍 发现依赖: %s\n", dep)
+                logger.Debug(LogCatDependency, "🔍 发现依赖: %s", dep)
             }
         }
     }
     
-    
     return deps
+}
+
+// PrintLogHelp 输出日志分类帮助信息
+func PrintLogHelp() {
+    fmt.Println("日志分类系统帮助：")
+    fmt.Println("  --log-level 选项：设置日志级别 (debug, info, warn, error)")
+    fmt.Println("  --log-categories 选项：设置启用的日志类别，用逗号分隔")
+    fmt.Println()
+    fmt.Println("可用的日志类别：")
+    fmt.Printf("  %s: 一般性日志信息\n", LogCatGeneral)
+    fmt.Printf("  %s: 网络请求相关日志\n", LogCatNetwork)
+    fmt.Printf("  %s: 依赖分析和处理日志\n", LogCatDependency)
+    fmt.Printf("  %s: 编译相关日志\n", LogCatCompile)
+    fmt.Printf("  %s: 文件系统操作日志\n", LogCatFS)
+    fmt.Println()
+    fmt.Println("示例:")
+    fmt.Println("  esm download ./project --log-level=debug --log-categories=general,network")
+    fmt.Println("  esm download ./app.tsx --deno-json=deno.json --log-categories=compile,deps")
 } 
