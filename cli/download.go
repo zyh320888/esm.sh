@@ -735,6 +735,17 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     } else {
         // 子模块使用对应文件名
         filename := filepath.Base(modulePath)
+        // 修复：检查路径中是否有重复的目录结构
+        if strings.Contains(modulePath, apiDomain) {
+            // 从路径中移除重复的域名部分
+            parts := strings.Split(modulePath, apiDomain)
+            if len(parts) > 1 {
+                modulePath = parts[len(parts)-1]
+                fmt.Printf("检测到路径中有重复的域名，修正为: %s\n", modulePath)
+                moduleBase = filepath.Dir(modulePath)
+                filename = filepath.Base(modulePath)
+            }
+        }
         moduleSavePath = filepath.Join(esmDir, moduleBase, filename + ".js")
     }
     
@@ -862,12 +873,6 @@ func downloadAndProcessModule(spec, url, outDir string, wg *sync.WaitGroup, sema
     }
     
     fmt.Printf("模块处理完成: %s\n", url)
-}
-
-// 重写downloadSubModule函数，直接调用通用函数
-func downloadSubModule(parentModule, subModule, url, outDir string, semaphore chan struct{}, errChan chan error) {
-    // 直接调用通用函数处理模块
-    downloadAndProcessModule(subModule, url, outDir, nil, semaphore, errChan, nil)
 }
 
 // 判断是否为本地路径
