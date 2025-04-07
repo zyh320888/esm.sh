@@ -844,6 +844,17 @@ func normalizeModulePath(path string) string {
         }
     }
     
+    // 检查是否是包的主入口模块（不包含子路径部分的包引用）
+    isMainModule := false
+    
+    // 对于像 "react@19.0.0" 或 "antd@5.24.5" 这样直接引用包而没有子路径的情况，应视为主模块
+    if !isScope && len(pathParts) <= 2 {
+        // 检查最后一部分是否包含版本号 @x.y.z
+        if lastPart != "" && strings.Contains(lastPart, "@") && !strings.HasPrefix(lastPart, "@") {
+            isMainModule = true
+        }
+    }
+    
     // 根据路径类型添加适当的后缀
     if isScope {
         // 检查是否是作用域包的主模块
@@ -878,7 +889,7 @@ func normalizeModulePath(path string) string {
             path = strings.Join(pathParts, "/")
             logger.Debug(LogCatDependency, "为作用域包子模块添加.js后缀: %s", path)
         }
-    } else if lastPart == "" || !strings.Contains(path, "/") || strings.HasSuffix(path, "/") {
+    } else if isMainModule || lastPart == "" || !strings.Contains(path, "/") || strings.HasSuffix(path, "/") {
         // 普通主模块，添加index.js
         // 例如 /react-dom@19.0.0 或 /react-dom@19.0.0/ -> /react-dom@19.0.0/index.js
         if !strings.HasSuffix(path, "/index.js") && !strings.HasSuffix(path, "/index.mjs") {
@@ -1436,7 +1447,7 @@ func processWrapperContent(content []byte, apiDomain string) []byte {
 func findDeepDependencies(content []byte, currentModulePath string) []string {
     // 提取形如 "/react-dom@19.0.0/es2022/react-dom.mjs" 的依赖路径
     // import*as __0$ from"/react@19.0.0/es2022/react.mjs";
-    dependencyRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["']((?:\/|\.[\.\/]).*?)["']`)
+    dependencyRegex := regexp.MustCompile(`(?:import\s*\*?\s*as\s*[^"']*\s*from|import\s*\{[^}]*\}\s*from|import\s+[^"'\s]+\s+from|import|export\s*\*\s*from|export\s*\{\s*[^}]*\}\s*from)\s*["']((?:\/|\.[\.\/]).*?)["']`)
     matches := dependencyRegex.FindAllSubmatch(content, -1)
     
     var deps []string
